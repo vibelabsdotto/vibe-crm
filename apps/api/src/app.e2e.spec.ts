@@ -74,7 +74,7 @@ describe('API (e2e)', () => {
   it('GET /v1/stats without auth is 401', async () => {
     const res = await request(server).get('/v1/stats');
     expect(res.status).toBe(401);
-    expect(typeof res.body.error).toBe('string');
+    expect(res.body).toEqual({ error: 'unauthorized' });
   });
 
   it('company/contact CRUD over the session cookie', async () => {
@@ -254,11 +254,13 @@ describe('API (e2e)', () => {
       .get('/v1/stats')
       .set('Authorization', `Bearer ${token}`);
     expect(dead.status).toBe(401);
+    expect(dead.body).toEqual({ error: 'unauthorized' });
 
     const again = await request(server)
       .delete(`/v1/tokens/${id}`)
       .set('Cookie', cookie);
     expect(again.status).toBe(404);
+    expect(again.body).toEqual({ error: 'not_found' });
   });
 
   it('rejects unknown custom fields with 422', async () => {
@@ -289,7 +291,7 @@ describe('API (e2e)', () => {
       .get('/v1/contacts/does-not-exist')
       .set('Cookie', cookie);
     expect(missingContact.status).toBe(404);
-    expect(typeof missingContact.body.error).toBe('string');
+    expect(missingContact.body).toEqual({ error: 'not_found' });
 
     const missingDeal = await request(server)
       .put('/v1/deals/does-not-exist')

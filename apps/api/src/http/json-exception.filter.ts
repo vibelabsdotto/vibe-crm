@@ -63,12 +63,9 @@ export class JsonExceptionFilter implements ExceptionFilter {
         response.status(status).json({ error: 'bad_request' });
         return;
       }
-      // Structured contract bodies (422 unknown-fields) pass through as-is.
-      if (typeof raw === 'object' && raw !== null && 'error' in raw) {
-        response.status(status).json(raw);
-        return;
-      }
-      const message = typeof raw === 'string' ? raw : undefined;
+      // 401/404 normalize to contract codes BEFORE the passthrough below —
+      // Nest's default bodies ({message, error:'Unauthorized', statusCode})
+      // already contain an `error` key and would otherwise leak through.
       if (statusNum === Number(HttpStatus.UNAUTHORIZED)) {
         response.status(status).json({ error: 'unauthorized' });
         return;
@@ -77,6 +74,12 @@ export class JsonExceptionFilter implements ExceptionFilter {
         response.status(status).json({ error: 'not_found' });
         return;
       }
+      // Structured contract bodies (422 unknown-fields) pass through as-is.
+      if (typeof raw === 'object' && raw !== null && 'error' in raw) {
+        response.status(status).json(raw);
+        return;
+      }
+      const message = typeof raw === 'string' ? raw : undefined;
       if (
         statusNum === Number(HttpStatus.BAD_REQUEST) &&
         exception instanceof BadRequestException &&
