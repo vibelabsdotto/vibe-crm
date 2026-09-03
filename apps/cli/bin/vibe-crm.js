@@ -21,7 +21,7 @@ import {
 import { ApiError, UsageError, assertInstance, connect, health, lastConnectedInstance, request } from "../lib/client.mjs";
 import * as C from "../lib/commands.mjs";
 
-const HELP = `vibe-crm — Vibe CRM CLI (contacts, companies, deals, pipeline)
+const HELP = `vibe-crm — Vibe CRM CLI (contacts, companies, deals, products, subscriptions)
 
 Usage: vibe-crm <command> [flags]
 
@@ -50,18 +50,33 @@ CONTACTS & COMPANIES
   vibe-crm company rm --id <id>
 
 DEALS & PIPELINE
-  vibe-crm deals [--search <q>] [--stage <key>]
-  vibe-crm deal add --name <v> [--contact-id <id>] [--value <n>] [--stage <key>] [--close-date <iso>] [--notes <v>]
+  vibe-crm deals [--search <q>] [--stage <key>] [--product <key>]
+  vibe-crm deal add --name <v> [--contact-id <id>] [--company-id <id>] [--product <key>]
+                    [--value <n>] [--stage <key>] [--close-date <iso>] [--notes <v>]
+  vibe-crm deal update --id <id> [--name <v> ...] [--company-id <id>] [--product <key>]
   vibe-crm deal move --id <id> --stage <key>
   vibe-crm deal rm --id <id>
   vibe-crm pipeline                         deals grouped by stage
   vibe-crm stages                           list pipeline stages
+
+PRODUCTS & SUBSCRIPTIONS
+  vibe-crm products [--search <q>]
+  vibe-crm product add --name <v> [--key <slug>] [--type product|service|other] [--status <v>] [--notes <v>]
+  vibe-crm product rm --key <slug>
+  vibe-crm subscriptions [--status <v>] [--product <key>] [--company-id <id>]
+  vibe-crm subscription add --name <v> [--company-id <id>] [--product <key>] [--amount <n>]
+                            [--interval monthly|quarterly|yearly|one_time] [--status <v>] [--notes <v>]
+  vibe-crm subscription update --id <id> [--name <v> ...]
+  vibe-crm subscription cancel --id <id>   (sets status=cancelled)
+  vibe-crm subscription rm --id <id>
+  vibe-crm mrr                              recurring-revenue summary
 
 ACTIVITY / IMPORT / TOKENS
   vibe-crm activity log --entity contact|company|deal --id <entityId> [--type note|email|meeting|stage_change] [--body <text>]
   vibe-crm activity list --entity contact|company|deal --id <entityId>
   vibe-crm import contacts <file.csv|json> [--dry-run] [--infer-company]
   vibe-crm import companies <file.csv|json> [--dry-run]
+  vibe-crm import notion <seed.json> [--dry-run]   (Notion export, idempotent)
   vibe-crm tokens create --name <label>     (prints the vc_… secret ONCE)
   vibe-crm tokens ls
   vibe-crm tokens revoke --id <id>
@@ -220,6 +235,10 @@ async function main() {
 
   // ---- help-first routing for data commands (no instance/key needed for --help)
   if (flags.help === true || flags.h === true) {
+    if (command === "import" && effectiveSub === "notion") {
+      console.log(C.IMPORT_NOTION_HELP);
+      return;
+    }
     const helpMap = {
       contacts: C.CONTACTS_HELP,
       contact: C.CONTACT_HELP,
@@ -229,6 +248,11 @@ async function main() {
       deal: C.DEAL_HELP,
       pipeline: C.PIPELINE_HELP,
       stages: C.STAGES_HELP,
+      products: C.PRODUCTS_HELP,
+      product: C.PRODUCT_HELP,
+      subscriptions: C.SUBSCRIPTIONS_HELP,
+      subscription: C.SUBSCRIPTION_HELP,
+      mrr: C.MRR_HELP,
       activity: C.ACTIVITY_HELP,
       import: C.IMPORT_HELP,
       tokens: C.TOKENS_HELP
@@ -268,15 +292,37 @@ async function main() {
         break;
       case "deal":
         if (effectiveSub === "add") await C.cmdDealAdd(flags, ctx);
+        else if (effectiveSub === "update") await C.cmdDealUpdate(flags, ctx);
         else if (effectiveSub === "move") await C.cmdDealMove(flags, ctx);
         else if (effectiveSub === "rm") await C.cmdDealRm(flags, ctx);
-        else fail('vibe-crm deal needs a subcommand: add | move | rm (try: vibe-crm deal --help)');
+        else fail('vibe-crm deal needs a subcommand: add | update | move | rm (try: vibe-crm deal --help)');
         break;
       case "pipeline":
         await C.cmdPipeline(flags, ctx);
         break;
       case "stages":
         await C.cmdStages(flags, ctx);
+        break;
+      case "products":
+        await C.cmdProducts(flags, ctx);
+        break;
+      case "product":
+        if (effectiveSub === "add") await C.cmdProductAdd(flags, ctx);
+        else if (effectiveSub === "rm") await C.cmdProductRm(flags, ctx);
+        else fail('vibe-crm product needs a subcommand: add | rm (try: vibe-crm product --help)');
+        break;
+      case "subscriptions":
+        await C.cmdSubscriptions(flags, ctx);
+        break;
+      case "subscription":
+        if (effectiveSub === "add") await C.cmdSubscriptionAdd(flags, ctx);
+        else if (effectiveSub === "update") await C.cmdSubscriptionUpdate(flags, ctx);
+        else if (effectiveSub === "cancel") await C.cmdSubscriptionCancel(flags, ctx);
+        else if (effectiveSub === "rm") await C.cmdSubscriptionRm(flags, ctx);
+        else fail('vibe-crm subscription needs a subcommand: add | update | cancel | rm (try: vibe-crm subscription --help)');
+        break;
+      case "mrr":
+        await C.cmdMrr(flags, ctx);
         break;
       case "activity":
         if (effectiveSub === "log") await C.cmdActivityLog(flags, ctx);
@@ -286,7 +332,8 @@ async function main() {
       case "import":
         if (effectiveSub === "contacts") await C.cmdImport(flags, ctx, "contacts");
         else if (effectiveSub === "companies") await C.cmdImport(flags, ctx, "companies");
-        else fail('vibe-crm import needs a subcommand: contacts | companies (try: vibe-crm import --help)');
+        else if (effectiveSub === "notion") await C.cmdImportNotion(flags, ctx);
+        else fail('vibe-crm import needs a subcommand: contacts | companies | notion (try: vibe-crm import --help)');
         break;
       case "tokens":
         if (effectiveSub === "create") await C.cmdTokensCreate(flags, ctx);

@@ -44,12 +44,28 @@ export const contacts = sqliteTable(
   ],
 );
 
+export const products = sqliteTable('products', {
+  key: text('key').primaryKey(),
+  name: text('name').notNull(),
+  type: text('type').notNull().default('product'),
+  status: text('status').notNull().default(''),
+  notes: text('notes').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const deals = sqliteTable(
   'deals',
   {
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     contactId: text('contact_id').references(() => contacts.id, {
+      onDelete: 'set null',
+    }),
+    companyId: text('company_id').references(() => companies.id, {
+      onDelete: 'set null',
+    }),
+    productId: text('product_id').references(() => products.key, {
       onDelete: 'set null',
     }),
     value: real('value').notNull().default(0),
@@ -61,7 +77,42 @@ export const deals = sqliteTable(
   },
   (table) => [
     index('idx_deals_contact').on(table.contactId),
+    index('idx_deals_company').on(table.companyId),
+    index('idx_deals_product').on(table.productId),
     index('idx_deals_stage').on(table.stage),
+  ],
+);
+
+// Recurring contracts (retainers/abos) — the leading retainer system
+// (contract §1). MRR rule: active|trial only, monthly=amount,
+// quarterly=amount/3, yearly=amount/12, one_time=0.
+export const subscriptions = sqliteTable(
+  'subscriptions',
+  {
+    id: text('id').primaryKey(),
+    companyId: text('company_id').references(() => companies.id, {
+      onDelete: 'set null',
+    }),
+    contactId: text('contact_id').references(() => contacts.id, {
+      onDelete: 'set null',
+    }),
+    productId: text('product_id').references(() => products.key, {
+      onDelete: 'set null',
+    }),
+    name: text('name').notNull(),
+    amount: real('amount').notNull().default(0),
+    currency: text('currency').notNull().default('EUR'),
+    interval: text('interval').notNull().default('monthly'),
+    startDate: text('start_date').notNull().default(''),
+    endDate: text('end_date').notNull().default(''),
+    status: text('status').notNull().default('active'),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('idx_subscriptions_company').on(table.companyId),
+    index('idx_subscriptions_status').on(table.status),
   ],
 );
 
@@ -135,7 +186,9 @@ export * from './auth-schema';
 export const schema = {
   companies,
   contacts,
+  products,
   deals,
+  subscriptions,
   stages,
   activities,
   customFieldDefs,
@@ -153,7 +206,9 @@ export const databaseSchema = {
 
 export type CompanyRow = typeof companies.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
+export type ProductRow = typeof products.$inferSelect;
 export type DealRow = typeof deals.$inferSelect;
+export type SubscriptionRow = typeof subscriptions.$inferSelect;
 export type StageRow = typeof stages.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
 export type CustomFieldDefRow = typeof customFieldDefs.$inferSelect;

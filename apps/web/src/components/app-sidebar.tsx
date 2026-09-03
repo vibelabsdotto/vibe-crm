@@ -1,11 +1,11 @@
 "use client";
 
-import { Building2, Handshake, KeyRound, LayoutDashboard, Settings, Tags, Users } from "lucide-react";
+import { Building2, Handshake, KeyRound, LayoutDashboard, Repeat, Settings, Tags, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
-import { asList, type Deal, type Stage } from "@/lib/types";
+import { asList, type Deal, type Stage, type SubscriptionSummary } from "@/lib/types";
 import { useSidebar, SidebarContent, SidebarFooter, SidebarGroupLabel, SidebarHeader, SidebarMenuItem } from "./ui/sidebar";
 
 const NAV = [
@@ -13,9 +13,11 @@ const NAV = [
   { href: "/contacts", label: "Kontakte", icon: <Users size={18} /> },
   { href: "/companies", label: "Firmen", icon: <Building2 size={18} /> },
   { href: "/deals", label: "Deals", icon: <Handshake size={18} /> },
+  { href: "/subscriptions", label: "Abos", icon: <Repeat size={18} /> },
 ];
 
 const SETTINGS_NAV = [
+  { href: "/settings/products", label: "Produkte", icon: <Tags size={18} /> },
   { href: "/settings/properties", label: "Custom Fields", icon: <Tags size={18} /> },
   { href: "/settings/tokens", label: "API-Tokens", icon: <KeyRound size={18} /> },
 ];
@@ -52,10 +54,31 @@ function OpenDealsBadge() {
   return count;
 }
 
+/** Badge: aktive Subscriptions (Summary). Fehler → kein Badge. */
+function ActiveSubsBadge() {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const summary = await apiFetch<SubscriptionSummary>("/v1/subscriptions/summary");
+        if (!cancelled) setCount(summary.active);
+      } catch {
+        if (!cancelled) setCount(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return count;
+}
+
 export function AppSidebar() {
   const pathname = usePathname();
   const { setOpenMobile } = useSidebar();
   const openDeals = OpenDealsBadge();
+  const activeSubs = ActiveSubsBadge();
   const closeMobile = () => setOpenMobile(false);
 
   return (
@@ -77,7 +100,7 @@ export function AppSidebar() {
               active={isActive(pathname, item.href)}
               icon={item.icon}
               label={item.label}
-              badge={item.href === "/deals" ? openDeals : undefined}
+              badge={item.href === "/deals" ? openDeals : item.href === "/subscriptions" ? activeSubs : undefined}
               onNavigate={closeMobile}
             />
           ))}

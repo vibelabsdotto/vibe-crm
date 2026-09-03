@@ -359,7 +359,7 @@ export async function cmdCompanyRm(args, ctx) {
 
 export const DEALS_HELP = `vibe-crm deals — list deals
 
-Usage: vibe-crm deals [--search <q>] [--stage <key>] [--page <n>] [--limit <n>]`;
+Usage: vibe-crm deals [--search <q>] [--stage <key>] [--product <key>] [--page <n>] [--limit <n>]`;
 
 export async function cmdDeals(args, ctx) {
   if (args.help === true || args.h === true) {
@@ -372,6 +372,7 @@ export async function cmdDeals(args, ctx) {
     query: {
       search: flag(args, "search"),
       stage: flag(args, "stage"),
+      product: flag(args, "product", "product-id", "productId"),
       page: flag(args, "page"),
       limit: flag(args, "limit")
     },
@@ -397,11 +398,15 @@ export async function cmdDeals(args, ctx) {
   console.log(`\n${rows.length}/${total} deal(s) on ${url}${tv}`);
 }
 
-export const DEAL_HELP = `vibe-crm deal — add | move | rm
+export const DEAL_HELP = `vibe-crm deal — add | update | move | rm
 
 Usage:
-  vibe-crm deal add --name <v> [--contact-id <id>] [--value <n>] [--stage <key>]
-                    [--close-date <iso>] [--notes <v>] [--set key=value ...]
+  vibe-crm deal add --name <v> [--contact-id <id>] [--company-id <id>] [--product <key>]
+                    [--value <n>] [--stage <key>] [--close-date <iso>] [--notes <v>]
+                    [--set key=value ...]
+  vibe-crm deal update --id <id> [--name <v>] [--contact-id <id>] [--company-id <id>]
+                       [--product <key>] [--value <n>] [--stage <key>] [--close-date <iso>]
+                       [--notes <v>] [--set key=value ...]
   vibe-crm deal move --id <id> --stage <key>
   vibe-crm deal rm --id <id>`;
 
@@ -415,6 +420,10 @@ export async function cmdDealAdd(args, ctx) {
   const body = { name };
   const contactId = flag(args, "contact-id", "contactId", "contact");
   if (contactId !== undefined) body.contact_id = contactId;
+  const companyId = flag(args, "company-id", "companyId", "company");
+  if (companyId !== undefined) body.company_id = companyId;
+  const productId = flag(args, "product", "product-id", "productId");
+  if (productId !== undefined) body.product_id = productId;
   const value = flag(args, "value");
   if (value !== undefined) {
     const n = Number(value);
@@ -432,6 +441,40 @@ export async function cmdDealAdd(args, ctx) {
   const data = await request(url, { method: "POST", path: "/v1/deals", body, token: key });
   const d = data?.deal ?? data;
   emit(ctx, `Created deal "${d.name ?? name}" ${d.id ?? ""}`, { instance: url, deal: d });
+}
+
+export async function cmdDealUpdate(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(DEAL_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const id = need(args, "id", "vibe-crm deal update needs --id <id>");
+  const body = {};
+  for (const [opt, api] of [["name", "name"], ["stage", "stage"], ["notes", "notes"]]) {
+    const v = flag(args, opt);
+    if (v !== undefined) body[api] = v;
+  }
+  const contactId = flag(args, "contact-id", "contactId", "contact");
+  if (contactId !== undefined) body.contact_id = contactId;
+  const companyId = flag(args, "company-id", "companyId", "company");
+  if (companyId !== undefined) body.company_id = companyId;
+  const productId = flag(args, "product", "product-id", "productId");
+  if (productId !== undefined) body.product_id = productId;
+  const value = flag(args, "value");
+  if (value !== undefined) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new UsageError(`--value must be a number (got "${value}")`);
+    body.value = n;
+  }
+  const closeDate = flag(args, "close-date", "closeDate", "close");
+  if (closeDate !== undefined) body.close_date = closeDate;
+  const custom = customBag(args);
+  if (Object.keys(custom).length) body.custom = custom;
+  if (Object.keys(body).length === 0) throw new UsageError("vibe-crm deal update needs at least one field to change");
+  const data = await request(url, { method: "PUT", path: `/v1/deals/${encodeURIComponent(id)}`, body, token: key });
+  const d = data?.deal ?? data;
+  emit(ctx, `✓ Updated deal ${d.id ?? id}`, { instance: url, deal: d });
 }
 
 export async function cmdDealMove(args, ctx) {
@@ -612,10 +655,13 @@ export const IMPORT_HELP = `vibe-crm import — bulk import from CSV or JSON
 Usage:
   vibe-crm import contacts <file.csv|json> [--dry-run] [--infer-company]
   vibe-crm import companies <file.csv|json> [--dry-run]
+  vibe-crm import notion <seed.json> [--dry-run]
 
 CSV: header row with API field names (first_name,last_name,email,…).
 JSON: an array of records, or {"contacts": [...]} / {"companies": [...]}.
---dry-run parses + validates locally without sending anything.`;
+--dry-run parses + validates locally without sending anything.
+Notion seeds ({products, companies, contacts, deals, subscriptions, activities}) resolve
+names to IDs case-insensitively; --dry-run reads existing records to project skips.`;
 
 function parseCsv(text) {
   const rows = [];
@@ -780,4 +826,647 @@ export async function cmdTokensRevoke(args, ctx) {
   const id = need(args, "id", "vibe-crm tokens revoke needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/tokens/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Revoked token ${id}`, { instance: url, ok: true, id });
+}
+
+// ------------------------------------------------------------------- products
+
+export const PRODUCTS_HELP = `vibe-crm products — list products (name-asc)
+
+Usage: vibe-crm products [--search <q>]`;
+
+export async function cmdProducts(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(PRODUCTS_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const data = await request(url, {
+    path: "/v1/products",
+    query: { search: flag(args, "search") },
+    token: key
+  });
+  const { rows } = asList(data, "products");
+  if (ctx.json) return emit(ctx, "", { instance: url, products: rows });
+  if (rows.length === 0) return console.log("No products found.");
+  console.log(
+    table(
+      rows.map((p) => ({
+        key: p.key ?? "",
+        name: p.name ?? "",
+        type: p.type ?? "",
+        status: p.status ?? ""
+      })),
+      ["key", "name", "type", "status"]
+    )
+  );
+  console.log(`\n${rows.length} product(s) on ${url}`);
+}
+
+export const PRODUCT_HELP = `vibe-crm product — add | rm
+
+Usage:
+  vibe-crm product add --name <v> [--key <slug>] [--type product|service|other]
+                       [--status <v>] [--notes <v>]
+  vibe-crm product rm --key <slug>`;
+
+export async function cmdProductAdd(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(PRODUCT_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const name = need(args, "name", "vibe-crm product add needs --name <v>");
+  const body = { name };
+  for (const f of ["key", "type", "status", "notes"]) {
+    const v = flag(args, f);
+    if (v !== undefined) body[f] = v;
+  }
+  const data = await request(url, { method: "POST", path: "/v1/products", body, token: key });
+  const p = data?.product ?? data;
+  emit(ctx, `Created product "${p.name ?? name}" (${p.key ?? ""})`, { instance: url, product: p });
+}
+
+export async function cmdProductRm(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(PRODUCT_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const slug = need(args, "key", "vibe-crm product rm needs --key <slug>");
+  await request(url, { method: "DELETE", path: `/v1/products/${encodeURIComponent(slug)}`, token: key });
+  emit(ctx, `✓ Removed product ${slug}`, { instance: url, ok: true, key: slug });
+}
+
+// ------------------------------------------------------------------- subscriptions & mrr
+
+export const SUBSCRIPTIONS_HELP = `vibe-crm subscriptions — list subscriptions
+
+Usage: vibe-crm subscriptions [--status active|trial|paused|cancelled|expired]
+                              [--product <key>] [--company-id <id>] [--page <n>] [--limit <n>]`;
+
+export async function cmdSubscriptions(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(SUBSCRIPTIONS_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const data = await request(url, {
+    path: "/v1/subscriptions",
+    query: {
+      status: flag(args, "status"),
+      product: flag(args, "product", "product-id", "productId"),
+      company_id: flag(args, "company-id", "companyId", "company"),
+      page: flag(args, "page"),
+      limit: flag(args, "limit")
+    },
+    token: key
+  });
+  const { rows, total } = asList(data, "subscriptions");
+  if (ctx.json) return emit(ctx, "", { instance: url, subscriptions: rows, total });
+  if (rows.length === 0) return console.log("No subscriptions found.");
+  console.log(
+    table(
+      rows.map((s) => ({
+        id: short(s.id),
+        name: s.name ?? "",
+        amount: `${s.amount ?? 0} ${s.currency ?? ""}`.trim(),
+        interval: s.interval ?? "",
+        status: s.status ?? "",
+        company: s.company_name ?? s.company_id ?? "",
+        product: s.product_name ?? s.product_id ?? ""
+      })),
+      ["id", "name", "amount", "interval", "status", "company", "product"]
+    )
+  );
+  console.log(`\n${rows.length}/${total} subscription(s) on ${url}`);
+}
+
+export const SUBSCRIPTION_HELP = `vibe-crm subscription — add | update | cancel | rm
+
+Usage:
+  vibe-crm subscription add --name <v> [--company-id <id>] [--contact-id <id>] [--product <key>]
+                            [--amount <n>] [--currency <code>] [--interval monthly|quarterly|yearly|one_time]
+                            [--start-date <iso>] [--end-date <iso>] [--status active|trial|paused|cancelled|expired]
+                            [--notes <v>]
+  vibe-crm subscription update --id <id> [--name <v> ...]
+  vibe-crm subscription cancel --id <id>   (sets status=cancelled)
+  vibe-crm subscription rm --id <id>`;
+
+const SUB_INTERVALS = ["monthly", "quarterly", "yearly", "one_time"];
+const SUB_STATUSES = ["active", "trial", "paused", "cancelled", "expired"];
+
+function subAmount(args) {
+  const raw = flag(args, "amount");
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new UsageError(`--amount must be a number (got "${raw}")`);
+  return n;
+}
+
+export async function cmdSubscriptionAdd(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(SUBSCRIPTION_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const name = need(args, "name", "vibe-crm subscription add needs --name <v>");
+  const body = { name };
+  const companyId = flag(args, "company-id", "companyId", "company");
+  if (companyId !== undefined) body.company_id = companyId;
+  const contactId = flag(args, "contact-id", "contactId", "contact");
+  if (contactId !== undefined) body.contact_id = contactId;
+  const productId = flag(args, "product", "product-id", "productId");
+  if (productId !== undefined) body.product_id = productId;
+  const amount = subAmount(args);
+  if (amount !== undefined) body.amount = amount;
+  for (const [opt, api] of [["currency", "currency"], ["start-date", "start_date"], ["end-date", "end_date"], ["notes", "notes"]]) {
+    const v = flag(args, opt);
+    if (v !== undefined) body[api] = v;
+  }
+  const interval = flag(args, "interval");
+  if (interval !== undefined) {
+    if (!SUB_INTERVALS.includes(interval)) throw new UsageError(`--interval must be one of: ${SUB_INTERVALS.join(" | ")} (got "${interval}")`);
+    body.interval = interval;
+  }
+  const status = flag(args, "status");
+  if (status !== undefined) {
+    if (!SUB_STATUSES.includes(status)) throw new UsageError(`--status must be one of: ${SUB_STATUSES.join(" | ")} (got "${status}")`);
+    body.status = status;
+  }
+  const data = await request(url, { method: "POST", path: "/v1/subscriptions", body, token: key });
+  const s = data?.subscription ?? data;
+  emit(ctx, `Created subscription "${s.name ?? name}" ${s.id ?? ""}`, { instance: url, subscription: s });
+}
+
+export async function cmdSubscriptionUpdate(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(SUBSCRIPTION_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const id = need(args, "id", "vibe-crm subscription update needs --id <id>");
+  const body = {};
+  for (const [opt, api] of [
+    ["name", "name"],
+    ["currency", "currency"],
+    ["start-date", "start_date"],
+    ["end-date", "end_date"],
+    ["notes", "notes"]
+  ]) {
+    const v = flag(args, opt);
+    if (v !== undefined) body[api] = v;
+  }
+  const companyId = flag(args, "company-id", "companyId", "company");
+  if (companyId !== undefined) body.company_id = companyId;
+  const contactId = flag(args, "contact-id", "contactId", "contact");
+  if (contactId !== undefined) body.contact_id = contactId;
+  const productId = flag(args, "product", "product-id", "productId");
+  if (productId !== undefined) body.product_id = productId;
+  const amount = subAmount(args);
+  if (amount !== undefined) body.amount = amount;
+  const interval = flag(args, "interval");
+  if (interval !== undefined) {
+    if (!SUB_INTERVALS.includes(interval)) throw new UsageError(`--interval must be one of: ${SUB_INTERVALS.join(" | ")} (got "${interval}")`);
+    body.interval = interval;
+  }
+  const status = flag(args, "status");
+  if (status !== undefined) {
+    if (!SUB_STATUSES.includes(status)) throw new UsageError(`--status must be one of: ${SUB_STATUSES.join(" | ")} (got "${status}")`);
+    body.status = status;
+  }
+  if (Object.keys(body).length === 0) throw new UsageError("vibe-crm subscription update needs at least one field to change");
+  const data = await request(url, { method: "PUT", path: `/v1/subscriptions/${encodeURIComponent(id)}`, body, token: key });
+  const s = data?.subscription ?? data;
+  emit(ctx, `✓ Updated subscription ${s.id ?? id}`, { instance: url, subscription: s });
+}
+
+export async function cmdSubscriptionCancel(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(SUBSCRIPTION_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const id = need(args, "id", "vibe-crm subscription cancel needs --id <id>");
+  const data = await request(url, {
+    method: "PUT",
+    path: `/v1/subscriptions/${encodeURIComponent(id)}`,
+    body: { status: "cancelled" },
+    token: key
+  });
+  const s = data?.subscription ?? data;
+  emit(ctx, `✓ Cancelled subscription ${s.id ?? id}`, { instance: url, subscription: s });
+}
+
+export async function cmdSubscriptionRm(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(SUBSCRIPTION_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const id = need(args, "id", "vibe-crm subscription rm needs --id <id>");
+  await request(url, { method: "DELETE", path: `/v1/subscriptions/${encodeURIComponent(id)}`, token: key });
+  emit(ctx, `✓ Removed subscription ${id}`, { instance: url, ok: true, id });
+}
+
+export const MRR_HELP = `vibe-crm mrr — monthly recurring revenue summary (active + trial subscriptions)
+
+Usage: vibe-crm mrr`;
+
+export async function cmdMrr(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(MRR_HELP);
+    return;
+  }
+  const { url, key } = connect(args.instance);
+  const data = await request(url, { path: "/v1/subscriptions/summary", token: key });
+  if (ctx.json) return emit(ctx, "", { instance: url, ...data });
+  const byProduct = Array.isArray(data?.byProduct) ? data.byProduct : [];
+  console.log(
+    [
+      `MRR ${data?.mrr ?? 0} — ${data?.active ?? 0} active, ${data?.trial ?? 0} trial, ${data?.paused ?? 0} paused (${data?.total ?? 0} total)`,
+      byProduct.length === 0
+        ? "No product breakdown."
+        : table(
+            byProduct.map((p) => ({
+              product: p.product ?? "",
+              name: p.productName ?? "",
+              mrr: p.mrr ?? 0,
+              active: p.active ?? ""
+            })),
+            ["product", "name", "mrr", "active"]
+          )
+    ].join("\n")
+  );
+}
+
+// ------------------------------------------------------------------- import notion
+
+export const IMPORT_NOTION_HELP = `vibe-crm import notion — seed from a Notion export file (idempotent)
+
+Usage: vibe-crm import notion <seed.json> [--dry-run]
+
+Seed shape: { products[], companies[], contacts[], deals[], subscriptions[], activities[] }
+  products:      { key, name, type?, status?, notes? }
+  companies:     { name!, email?, phone?, notes? }
+  contacts:      { first_name!, last_name?, email?, phone?, title?, company:NAME?, status?, notes? }
+  deals:         { name!, company:NAME?, contact:FULL NAME?, product:KEY?, stage?, value?, notes? }
+  subscriptions: { name!, company:NAME?, product:KEY?, amount?, currency?, interval?, status?, start_date?, end_date?, notes? }
+  activities:    { company:NAME, body }
+
+Order: products → companies → contacts → deals → subscriptions → activities.
+Names resolve to IDs case-insensitively. Idempotency: companies skipped by name,
+products upserted by key, deals/subscriptions skipped by name+company, contacts
+skipped by email (or name+company). Activities are only created for companies and
+contacts created in the same run (contacts have no notes field — notes become
+note activities on the contact).
+--dry-run reads existing records to project skips but sends no writes.`;
+
+const norm = (v) => String(v ?? "").trim().toLowerCase();
+const contactFullName = (c) => [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
+
+async function listAll(url, key, path) {
+  const rows = [];
+  for (let page = 1; page <= 100; page++) {
+    const data = await request(url, { path, query: { page: String(page), limit: "100" }, token: key });
+    const listKey = data && typeof data === "object" ? Object.keys(data).find((k) => Array.isArray(data[k])) : undefined;
+    const batch = Array.isArray(data) ? data : listKey ? data[listKey] : [];
+    rows.push(...batch);
+    if (batch.length < 100 || rows.length >= (data?.total ?? rows.length)) break;
+  }
+  return rows;
+}
+
+function loadSeedFile(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    throw new UsageError(`Import file not found: ${file}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new UsageError(`Notion seed must be valid JSON: ${file}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new UsageError(`Notion seed must be an object {products, companies, contacts, deals, subscriptions, activities}: ${file}`);
+  }
+  const seed = {};
+  for (const k of ["products", "companies", "contacts", "deals", "subscriptions", "activities"]) {
+    const v = parsed[k] ?? [];
+    if (!Array.isArray(v)) throw new UsageError(`Notion seed "${k}" must be an array: ${file}`);
+    seed[k] = v;
+  }
+  return seed;
+}
+
+export async function cmdImportNotion(args, ctx) {
+  if (args.help === true || args.h === true) {
+    console.log(IMPORT_NOTION_HELP);
+    return;
+  }
+  const file = flag(args, "file") ?? args._positional?.[0];
+  if (!file) throw new UsageError("vibe-crm import notion needs <seed.json>");
+  const seed = loadSeedFile(file);
+  const dryRun = args["dry-run"] === true || args.dryRun === true;
+
+  // --dry-run works offline (local counts only); otherwise resolve against the API.
+  let url = null;
+  let key = null;
+  let online = false;
+  try {
+    ({ url, key } = connect(args.instance));
+    online = true;
+  } catch (err) {
+    if (!dryRun) throw err;
+  }
+
+  const existing = { products: [], companies: [], contacts: [], deals: [], subscriptions: [] };
+  if (online) {
+    existing.products = await listAll(url, key, "/v1/products");
+    existing.companies = await listAll(url, key, "/v1/companies");
+    existing.contacts = await listAll(url, key, "/v1/contacts");
+    existing.deals = await listAll(url, key, "/v1/deals");
+    existing.subscriptions = await listAll(url, key, "/v1/subscriptions");
+  }
+
+  const companyByName = new Map(existing.companies.map((c) => [norm(c.name), c]));
+  const productKeys = new Set(existing.products.map((p) => norm(p.key)));
+  const contactByEmail = new Map(existing.contacts.filter((c) => norm(c.email)).map((c) => [norm(c.email), c]));
+  const contactByNameCo = new Map(
+    existing.contacts.map((c) => [`${norm(contactFullName(c))}\0${norm(c.company_name ?? "")}`, c])
+  );
+  const dealKeys = new Set(
+    existing.deals.map((d) => `${norm(d.name)}\0${norm(d.company_name ?? d.company_id ?? "")}`)
+  );
+  const subKeys = new Set(
+    existing.subscriptions.map((s) => `${norm(s.name)}\0${norm(s.company_name ?? s.company_id ?? "")}`)
+  );
+
+  const counts = {
+    products: { created: 0, updated: 0 },
+    companies: { created: 0, skipped: 0 },
+    contacts: { created: 0, skipped: 0 },
+    deals: { created: 0, skipped: 0 },
+    subscriptions: { created: 0, skipped: 0 },
+    activities: { created: 0 }
+  };
+  const failures = [];
+  const fail = (step, ref, message) => failures.push({ step, ref: String(ref ?? "").slice(0, 80), message: String(message).slice(0, 200) });
+
+  const findCompany = (name) => (name ? companyByName.get(norm(name)) : undefined);
+  const findContact = (full) => {
+    if (!full) return undefined;
+    return existing.contacts.find((c) => norm(contactFullName(c)) === norm(full));
+  };
+
+  // ---- 1. products (upsert per key)
+  const productUpserts = [];
+  for (const p of seed.products) {
+    if (!p.key || !p.name) {
+      fail("products", p.name ?? p.key, "needs key + name — skipped");
+      continue;
+    }
+    const isUpdate = productKeys.has(norm(p.key));
+    const body = { name: p.name };
+    for (const f of ["type", "status", "notes"]) if (p[f] !== undefined) body[f] = p[f];
+    productUpserts.push({ p, body, isUpdate });
+    if (dryRun && !isUpdate) productKeys.add(norm(p.key));
+  }
+
+  // ---- 2. companies (skip per name)
+  const companyCreates = [];
+  for (const c of seed.companies) {
+    if (!c.name) {
+      fail("companies", "", "needs name — skipped");
+      continue;
+    }
+    if (companyByName.has(norm(c.name))) {
+      counts.companies.skipped++;
+      continue;
+    }
+    companyByName.set(norm(c.name), { id: null, name: c.name, __planned: true });
+    companyCreates.push(c);
+  }
+
+  // ---- 3. contacts (skip per email, else name+company)
+  const contactCreates = [];
+  const plannedContactKeys = new Set();
+  for (const c of seed.contacts) {
+    if (!c.first_name) {
+      fail("contacts", c.email ?? "", "needs first_name — skipped");
+      continue;
+    }
+    const emailKey = norm(c.email);
+    const coName = c.company ?? "";
+    const nameCoKey = `${norm(contactFullName(c))}\0${norm(coName)}`;
+    if ((emailKey && contactByEmail.has(emailKey)) || contactByNameCo.has(nameCoKey) || plannedContactKeys.has(emailKey || nameCoKey)) {
+      counts.contacts.skipped++;
+      continue;
+    }
+    plannedContactKeys.add(emailKey || nameCoKey);
+    contactCreates.push(c);
+  }
+
+  // ---- 4. deals (skip per name+company)
+  const dealCreates = [];
+  for (const d of seed.deals) {
+    if (!d.name) {
+      fail("deals", "", "needs name — skipped");
+      continue;
+    }
+    const dk = `${norm(d.name)}\0${norm(d.company ?? "")}`;
+    if (dealKeys.has(dk)) {
+      counts.deals.skipped++;
+      continue;
+    }
+    dealKeys.add(dk);
+    dealCreates.push(d);
+  }
+
+  // ---- 5. subscriptions (skip per name+company)
+  const subCreates = [];
+  for (const s of seed.subscriptions) {
+    if (!s.name) {
+      fail("subscriptions", "", "needs name — skipped");
+      continue;
+    }
+    const sk = `${norm(s.name)}\0${norm(s.company ?? "")}`;
+    if (subKeys.has(sk)) {
+      counts.subscriptions.skipped++;
+      continue;
+    }
+    subKeys.add(sk);
+    subCreates.push(s);
+  }
+
+  const newCompanyIds = new Map(); // norm(name) -> id (real run)
+  const newContactIds = new Map(); // norm(full name) -> id (real run)
+
+  if (dryRun) {
+    counts.products.created = productUpserts.filter((u) => !u.isUpdate).length;
+    counts.products.updated = productUpserts.filter((u) => u.isUpdate).length;
+    counts.companies.created = companyCreates.length;
+    counts.contacts.created = contactCreates.length;
+    counts.deals.created = dealCreates.length;
+    counts.subscriptions.created = subCreates.length;
+    // activities: seed entries with resolvable company + note activities for new contacts with notes
+    for (const a of seed.activities) if (a.company && a.body && companyByName.has(norm(a.company))) counts.activities.created++;
+    for (const c of contactCreates) if (norm(c.notes)) counts.activities.created++;
+  } else {
+    // ---- 1. products
+    for (const { p, body, isUpdate } of productUpserts) {
+      try {
+        if (isUpdate) {
+          await request(url, { method: "PUT", path: `/v1/products/${encodeURIComponent(p.key)}`, body, token: key });
+          counts.products.updated++;
+        } else {
+          await request(url, { method: "POST", path: "/v1/products", body: { key: p.key, ...body }, token: key });
+          counts.products.created++;
+          productKeys.add(norm(p.key));
+        }
+      } catch (err) {
+        fail("products", p.key, err instanceof Error ? err.message : String(err));
+      }
+    }
+    // ---- 2. companies
+    for (const c of companyCreates) {
+      try {
+        const body = { name: c.name };
+        for (const f of ["email", "phone", "notes"]) if (c[f] !== undefined) body[f] = c[f];
+        const data = await request(url, { method: "POST", path: "/v1/companies", body, token: key });
+        const created = data?.company ?? data;
+        companyByName.set(norm(c.name), created);
+        if (created?.id) newCompanyIds.set(norm(c.name), created.id);
+        counts.companies.created++;
+      } catch (err) {
+        companyByName.delete(norm(c.name));
+        fail("companies", c.name, err instanceof Error ? err.message : String(err));
+      }
+    }
+    // ---- 3. contacts
+    for (const c of contactCreates) {
+      try {
+        const co = findCompany(c.company);
+        const body = { first_name: c.first_name };
+        for (const [seedKey, api] of [["last_name", "last_name"], ["email", "email"], ["phone", "phone"], ["title", "title"], ["status", "status"]]) {
+          if (c[seedKey] !== undefined) body[api] = c[seedKey];
+        }
+        if (co?.id) body.company_id = co.id;
+        const data = await request(url, { method: "POST", path: "/v1/contacts", body, token: key });
+        const created = data?.contact ?? data;
+        if (created?.id) newContactIds.set(norm(contactFullName(c)), created.id);
+        if (created?.email && norm(created.email)) contactByEmail.set(norm(created.email), created);
+        counts.contacts.created++;
+        // contacts have no notes field — preserve as a note activity
+        if (norm(c.notes) && created?.id) {
+          try {
+            await request(url, {
+              method: "POST",
+              path: "/v1/activities",
+              body: { entity_type: "contact", entity_id: created.id, type: "note", body: c.notes },
+              token: key
+            });
+            counts.activities.created++;
+          } catch (err) {
+            fail("activities", `contact:${contactFullName(c)}`, err instanceof Error ? err.message : String(err));
+          }
+        }
+      } catch (err) {
+        fail("contacts", c.email || contactFullName(c), err instanceof Error ? err.message : String(err));
+      }
+    }
+    // ---- 4. deals
+    for (const d of dealCreates) {
+      try {
+        const co = findCompany(d.company);
+        if (d.company && !co?.id && !co?.__planned) throw new Error(`unknown company "${d.company}"`);
+        const contact = findContact(d.contact);
+        const body = { name: d.name };
+        if (co?.id) body.company_id = co.id;
+        const contactId = contact?.id ?? (d.contact ? newContactIds.get(norm(d.contact)) : undefined);
+        if (contactId) body.contact_id = contactId;
+        if (d.product && productKeys.has(norm(d.product))) body.product_id = d.product;
+        else if (d.product) throw new Error(`unknown product "${d.product}"`);
+        if (d.stage !== undefined) body.stage = d.stage;
+        if (d.value !== undefined) body.value = d.value;
+        if (d.notes !== undefined) body.notes = d.notes;
+        await request(url, { method: "POST", path: "/v1/deals", body, token: key });
+        counts.deals.created++;
+      } catch (err) {
+        fail("deals", d.name, err instanceof Error ? err.message : String(err));
+      }
+    }
+    // ---- 5. subscriptions
+    for (const s of subCreates) {
+      try {
+        const co = findCompany(s.company);
+        if (s.company && !co?.id && !co?.__planned) throw new Error(`unknown company "${s.company}"`);
+        const body = { name: s.name };
+        if (co?.id) body.company_id = co.id;
+        if (s.product && productKeys.has(norm(s.product))) body.product_id = s.product;
+        else if (s.product) throw new Error(`unknown product "${s.product}"`);
+        for (const [seedKey, api] of [
+          ["amount", "amount"],
+          ["currency", "currency"],
+          ["interval", "interval"],
+          ["status", "status"],
+          ["start_date", "start_date"],
+          ["end_date", "end_date"],
+          ["notes", "notes"]
+        ]) {
+          if (s[seedKey] !== undefined) body[api] = s[seedKey];
+        }
+        await request(url, { method: "POST", path: "/v1/subscriptions", body, token: key });
+        counts.subscriptions.created++;
+      } catch (err) {
+        fail("subscriptions", s.name, err instanceof Error ? err.message : String(err));
+      }
+    }
+    // ---- 6. activities (only for companies created in this run — idempotent)
+    for (const a of seed.activities) {
+      if (!a.company || !a.body) {
+        fail("activities", a.company ?? "", "needs company + body — skipped");
+        continue;
+      }
+      const companyId = newCompanyIds.get(norm(a.company)) ?? findCompany(a.company)?.id;
+      const isNew = newCompanyIds.has(norm(a.company));
+      if (!companyId || !isNew) continue; // existing company → activity assumed from first import
+      try {
+        await request(url, {
+          method: "POST",
+          path: "/v1/activities",
+          body: { entity_type: "company", entity_id: companyId, type: "note", body: a.body },
+          token: key
+        });
+        counts.activities.created++;
+      } catch (err) {
+        fail("activities", a.company, err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
+  const summary = { instance: url, dry_run: dryRun, file, counts, failures };
+  if (ctx.json) {
+    emit(ctx, "", summary);
+  } else {
+    const mode = dryRun ? `${file} — dry run, nothing sent${online ? "" : " (offline, no instance/key)"}` : `${file} → ${url}`;
+    console.log(`Notion import ${mode}`);
+    const line = (label, c, extra) => console.log(`  ${label.padEnd(14)} ${String(c).padEnd(4)} ${extra}`);
+    line("products", seed.products.length, `${counts.products.created} created, ${counts.products.updated} updated`);
+    line("companies", seed.companies.length, `${counts.companies.created} created, ${counts.companies.skipped} skipped`);
+    line("contacts", seed.contacts.length, `${counts.contacts.created} created, ${counts.contacts.skipped} skipped`);
+    line("deals", seed.deals.length, `${counts.deals.created} created, ${counts.deals.skipped} skipped`);
+    line("subscriptions", seed.subscriptions.length, `${counts.subscriptions.created} created, ${counts.subscriptions.skipped} skipped`);
+    line("activities", seed.activities.length, `${counts.activities.created} created`);
+    if (failures.length === 0) {
+      console.log(dryRun ? "✓ Dry run — nothing sent." : "✓ Import complete.");
+    } else {
+      console.error(`✗ ${failures.length} record(s) failed:`);
+      for (const f of failures.slice(0, 10)) console.error(`  [${f.step}] ${f.ref}: ${f.message}`);
+      if (failures.length > 10) console.error(`  … +${failures.length - 10} more`);
+    }
+  }
+  if (failures.length > 0) process.exitCode = 1;
 }

@@ -2,6 +2,8 @@ export interface Deal {
   id: string;
   name: string;
   contact_id: string | null;
+  company_id: string | null;
+  product_id: string | null;
   value: number;
   stage: string;
   close_date: string;
@@ -10,6 +12,7 @@ export interface Deal {
   contact_last_name?: string | null;
   company_name?: string | null;
   company_domain?: string | null;
+  product_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -17,6 +20,8 @@ export interface Deal {
 export interface DealBody {
   name?: unknown;
   contact_id?: unknown;
+  company_id?: unknown;
+  product_id?: unknown;
   value?: unknown;
   stage?: unknown;
   close_date?: unknown;
@@ -33,4 +38,5 @@ export interface DealListQuery {
   search?: string;
   filters?: string;
   stage?: string;
+  product?: string;
 }

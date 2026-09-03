@@ -19,8 +19,10 @@ import { DealsService } from './deals/deals.service';
 import { HealthController } from './health.controller';
 import { ImportController } from './import/import.controller';
 import { ImportService } from './import/import.service';
+import { ProductsModule } from './products/products.module';
 import { StagesModule } from './stages/stages.module';
 import { StatsController } from './stats/stats.controller';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { TokensController } from './tokens/tokens.controller';
 
 @Module({
@@ -30,6 +32,8 @@ import { TokensController } from './tokens/tokens.controller';
     DatabaseModule,
     CompaniesModule,
     StagesModule,
+    ProductsModule,
+    SubscriptionsModule,
     CustomFieldsModule,
   ],
   controllers: [

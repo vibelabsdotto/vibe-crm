@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
-import { asList, type Deal, type Stage, type Stats } from "@/lib/types";
+import { asList, type Deal, type Stage, type Stats, type SubscriptionSummary } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Dashboard" };
@@ -23,6 +23,7 @@ export default async function DashboardPage() {
   let stats: Stats | null = null;
   let stages: Stage[] = [];
   let deals: Deal[] = [];
+  let summary: SubscriptionSummary | null = null;
   let error: string | null = null;
 
   try {
@@ -36,6 +37,11 @@ export default async function DashboardPage() {
     stats = statsData;
     stages = asList<Stage>(stagesData, "stages").sort((a, b) => a.position - b.position);
     deals = asList<Deal>(boardData, "deals");
+    try {
+      summary = await apiFetch<SubscriptionSummary>("/v1/subscriptions/summary", { cookie });
+    } catch {
+      summary = null;
+    }
   } catch (e) {
     error =
       e instanceof ApiError
@@ -75,7 +81,7 @@ export default async function DashboardPage() {
         </div>
       ) : (
         <div className="stack">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <div className="stat-card">
               <div className="stat-value">{stats.contacts}</div>
               <div className="stat-label">Kontakte</div>
@@ -92,6 +98,10 @@ export default async function DashboardPage() {
               <div className="stat-value">{eur(stats.dealValue)}</div>
               <div className="stat-label">Deal-Volumen</div>
             </div>
+            <Link href="/subscriptions" prefetch={false} className="stat-card hover:no-underline">
+              <div className="stat-value">{summary ? eur(summary.mrr) : "—"}</div>
+              <div className="stat-label">MRR</div>
+            </Link>
           </div>
 
           <div className="card">

@@ -332,4 +332,363 @@ describe('API (e2e)', () => {
       .set('Cookie', cookie);
     expect(cleanup.body).toEqual({ ok: true });
   });
+
+  it('products CRUD incl. key dup 409 and referenced 409', async () => {
+    const noName = await request(server)
+      .post('/v1/products')
+      .set('Cookie', cookie)
+      .send({ type: 'product' });
+    expect(noName.status).toBe(400);
+
+    const created = await request(server)
+      .post('/v1/products')
+      .set('Cookie', cookie)
+      .send({ name: 'E2E Widget', type: 'product', status: 'live' });
+    expect(created.status).toBe(201);
+    expect(created.body.product).toMatchObject({
+      key: 'e2e_widget',
+      name: 'E2E Widget',
+      type: 'product',
+    });
+
+    const dup = await request(server)
+      .post('/v1/products')
+      .set('Cookie', cookie)
+      .send({ key: 'e2e_widget', name: 'Dupe' });
+    expect(dup.status).toBe(409);
+    expect(typeof dup.body.error).toBe('string');
+
+    const second = await request(server)
+      .post('/v1/products')
+      .set('Cookie', cookie)
+      .send({ key: 'aaa_first', name: 'Zed Last' });
+    expect(second.status).toBe(201);
+
+    const listed = await request(server)
+      .get('/v1/products')
+      .set('Cookie', cookie);
+    expect(listed.status).toBe(200);
+    const keys = (listed.body.products as Array<{ key: string }>).map(
+      (p) => p.key,
+    );
+    // name-asc ordering: 'Zed Last' sorts after 'E2E Widget'.
+    expect(keys.indexOf('aaa_first')).toBeGreaterThan(
+      keys.indexOf('e2e_widget'),
+    );
+
+    const searched = await request(server)
+      .get('/v1/products')
+      .set('Cookie', cookie)
+      .query({ search: 'widget' });
+    expect(
+      (searched.body.products as Array<{ key: string }>).map((p) => p.key),
+    ).toEqual(['e2e_widget']);
+
+    const updated = await request(server)
+      .put('/v1/products/e2e_widget')
+      .set('Cookie', cookie)
+      .send({ status: 'archived', type: 'service' });
+    expect(updated.status).toBe(200);
+    expect(updated.body.product.status).toBe('archived');
+
+    const badType = await request(server)
+      .put('/v1/products/e2e_widget')
+      .set('Cookie', cookie)
+      .send({ type: 'nope' });
+    expect(badType.status).toBe(400);
+
+    const missing = await request(server)
+      .put('/v1/products/does-not-exist')
+      .set('Cookie', cookie)
+      .send({ status: 'x' });
+    expect(missing.status).toBe(404);
+
+    // Referenced product cannot be deleted (409), like stages.
+    const deal = await request(server)
+      .post('/v1/deals')
+      .set('Cookie', cookie)
+      .send({ name: 'Widget Deal', product_id: 'e2e_widget' });
+    expect(deal.status).toBe(201);
+    const dealId = deal.body.deal.id as string;
+
+    const conflict = await request(server)
+      .delete('/v1/products/e2e_widget')
+      .set('Cookie', cookie);
+    expect(conflict.status).toBe(409);
+
+    await request(server)
+      .delete(`/v1/deals/${dealId}`)
+      .set('Cookie', cookie);
+    await request(server)
+      .delete('/v1/products/aaa_first')
+      .set('Cookie', cookie);
+    const removed = await request(server)
+      .delete('/v1/products/e2e_widget')
+      .set('Cookie', cookie);
+    expect(removed.body).toEqual({ ok: true });
+
+    const gone = await request(server)
+      .delete('/v1/products/e2e_widget')
+      .set('Cookie', cookie);
+    expect(gone.status).toBe(404);
+  });
+
+  it('subscriptions CRUD incl. filters, summary MRR and 400s', async () => {
+    const noName = await request(server)
+      .post('/v1/subscriptions')
+      .set('Cookie', cookie)
+      .send({ amount: 10 });
+    expect(noName.status).toBe(400);
+
+    for (const bad of [
+      { name: 'x', interval: 'nope' },
+      { name: 'x', status: 'nope' },
+      { name: 'x', product_id: 'no-such-product' },
+      { name: 'x', company_id: 'no-such-company' },
+    ]) {
+      const res = await request(server)
+        .post('/v1/subscriptions')
+        .set('Cookie', cookie)
+        .send(bad);
+      expect(res.status).toBe(400);
+    }
+
+    for (const p of [
+      { key: 'sub_p1', name: 'Sub P1' },
+      { key: 'sub_p2', name: 'Sub P2' },
+    ]) {
+      const res = await request(server)
+        .post('/v1/products')
+        .set('Cookie', cookie)
+        .send(p);
+      expect(res.status).toBe(201);
+    }
+    const company = await request(server)
+      .post('/v1/companies')
+      .set('Cookie', cookie)
+      .send({ name: 'Sub Co' });
+    expect(company.status).toBe(201);
+    const companyId = company.body.company.id as string;
+
+    const mk = async (body: Record<string, unknown>): Promise<string> => {
+      const res = await request(server)
+        .post('/v1/subscriptions')
+        .set('Cookie', cookie)
+        .send(body);
+      expect(res.status).toBe(201);
+      return res.body.subscription.id as string;
+    };
+    const s1 = await mk({
+      name: 'Retainer A',
+      product_id: 'sub_p1',
+      company_id: companyId,
+      amount: 90,
+      interval: 'monthly',
+      status: 'active',
+    });
+    const s2 = await mk({
+      name: 'Retainer B',
+      product_id: 'sub_p1',
+      amount: 300,
+      interval: 'quarterly',
+      status: 'active',
+    });
+    const s3 = await mk({
+      name: 'Trial C',
+      product_id: 'sub_p2',
+      amount: 1200,
+      interval: 'yearly',
+      status: 'trial',
+    });
+    const s4 = await mk({
+      name: 'Once D',
+      product_id: 'sub_p2',
+      amount: 500,
+      interval: 'one_time',
+      status: 'active',
+    });
+    const s5 = await mk({
+      name: 'Paused E',
+      product_id: 'sub_p1',
+      amount: 50,
+      interval: 'monthly',
+      status: 'paused',
+    });
+
+    const one = await request(server)
+      .get('/v1/subscriptions')
+      .set('Cookie', cookie)
+      .query({ company_id: companyId });
+    expect(one.status).toBe(200);
+    expect(one.body.total).toBe(1);
+    expect(one.body.subscriptions[0].company_name).toBe('Sub Co');
+    expect(one.body.subscriptions[0].product_name).toBe('Sub P1');
+
+    const byStatus = await request(server)
+      .get('/v1/subscriptions')
+      .set('Cookie', cookie)
+      .query({ status: 'active' });
+    expect(byStatus.body.total).toBe(3);
+
+    const byProduct = await request(server)
+      .get('/v1/subscriptions')
+      .set('Cookie', cookie)
+      .query({ product: 'sub_p1' });
+    expect(byProduct.body.total).toBe(3);
+
+    // MRR: 90 + 300/3 + 1200/12 + 0 (one_time) + 0 (paused) = 290.
+    const summary = await request(server)
+      .get('/v1/subscriptions/summary')
+      .set('Cookie', cookie);
+    expect(summary.status).toBe(200);
+    expect(summary.body).toMatchObject({
+      mrr: 290,
+      active: 3,
+      trial: 1,
+      paused: 1,
+      total: 5,
+    });
+    expect(summary.body.byProduct).toEqual([
+      { product: 'sub_p1', productName: 'Sub P1', mrr: 190, active: 2 },
+      { product: 'sub_p2', productName: 'Sub P2', mrr: 100, active: 2 },
+    ]);
+
+    const moved = await request(server)
+      .put(`/v1/subscriptions/${s5}`)
+      .set('Cookie', cookie)
+      .send({ status: 'cancelled' });
+    expect(moved.status).toBe(200);
+    expect(moved.body.subscription.status).toBe('cancelled');
+
+    const badUpdate = await request(server)
+      .put(`/v1/subscriptions/${s4}`)
+      .set('Cookie', cookie)
+      .send({ interval: 'nope' });
+    expect(badUpdate.status).toBe(400);
+
+    const missing = await request(server)
+      .put('/v1/subscriptions/does-not-exist')
+      .set('Cookie', cookie)
+      .send({ status: 'active' });
+    expect(missing.status).toBe(404);
+
+    // Subscription reference blocks product delete (409).
+    const blocked = await request(server)
+      .delete('/v1/products/sub_p2')
+      .set('Cookie', cookie);
+    expect(blocked.status).toBe(409);
+
+    for (const id of [s1, s2, s3, s4, s5]) {
+      const res = await request(server)
+        .delete(`/v1/subscriptions/${id}`)
+        .set('Cookie', cookie);
+      expect(res.body).toEqual({ ok: true });
+    }
+    const goneSub = await request(server)
+      .delete(`/v1/subscriptions/${s1}`)
+      .set('Cookie', cookie);
+    expect(goneSub.status).toBe(404);
+
+    for (const key of ['sub_p1', 'sub_p2']) {
+      const res = await request(server)
+        .delete(`/v1/products/${key}`)
+        .set('Cookie', cookie);
+      expect(res.body).toEqual({ ok: true });
+    }
+    const companyDeleted = await request(server)
+      .delete(`/v1/companies/${companyId}`)
+      .set('Cookie', cookie);
+    expect(companyDeleted.body).toEqual({ ok: true });
+  });
+
+  it('deals support company_id/product_id incl. product filter and 400', async () => {
+    for (const p of [
+      { key: 'deal_p1', name: 'Deal P1' },
+      { key: 'deal_p2', name: 'Deal P2' },
+    ]) {
+      const res = await request(server)
+        .post('/v1/products')
+        .set('Cookie', cookie)
+        .send(p);
+      expect(res.status).toBe(201);
+    }
+    const company = await request(server)
+      .post('/v1/companies')
+      .set('Cookie', cookie)
+      .send({ name: 'Deal Product Co' });
+    expect(company.status).toBe(201);
+    const companyId = company.body.company.id as string;
+
+    const badProduct = await request(server)
+      .post('/v1/deals')
+      .set('Cookie', cookie)
+      .send({ name: 'Bad Product Deal', product_id: 'no-such-product' });
+    expect(badProduct.status).toBe(400);
+
+    const badCompany = await request(server)
+      .post('/v1/deals')
+      .set('Cookie', cookie)
+      .send({ name: 'Bad Company Deal', company_id: 'no-such-company' });
+    expect(badCompany.status).toBe(400);
+
+    const deal = await request(server)
+      .post('/v1/deals')
+      .set('Cookie', cookie)
+      .send({
+        name: 'Product Deal',
+        company_id: companyId,
+        product_id: 'deal_p1',
+        value: 250,
+      });
+    expect(deal.status).toBe(201);
+    expect(deal.body.deal).toMatchObject({
+      company_id: companyId,
+      product_id: 'deal_p1',
+      company_name: 'Deal Product Co',
+      product_name: 'Deal P1',
+    });
+    const dealId = deal.body.deal.id as string;
+
+    const filtered = await request(server)
+      .get('/v1/deals')
+      .set('Cookie', cookie)
+      .query({ product: 'deal_p1' });
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.total).toBe(1);
+    expect(filtered.body.deals[0].id).toBe(dealId);
+
+    const empty = await request(server)
+      .get('/v1/deals')
+      .set('Cookie', cookie)
+      .query({ product: 'deal_p2' });
+    expect(empty.body.total).toBe(0);
+
+    const moved = await request(server)
+      .put(`/v1/deals/${dealId}`)
+      .set('Cookie', cookie)
+      .send({ product_id: 'deal_p2' });
+    expect(moved.status).toBe(200);
+    expect(moved.body.deal.product_id).toBe('deal_p2');
+
+    const badMove = await request(server)
+      .put(`/v1/deals/${dealId}`)
+      .set('Cookie', cookie)
+      .send({ product_id: 'no-such-product' });
+    expect(badMove.status).toBe(400);
+
+    const dealDeleted = await request(server)
+      .delete(`/v1/deals/${dealId}`)
+      .set('Cookie', cookie);
+    expect(dealDeleted.body).toEqual({ ok: true });
+    for (const key of ['deal_p1', 'deal_p2']) {
+      const res = await request(server)
+        .delete(`/v1/products/${key}`)
+        .set('Cookie', cookie);
+      expect(res.body).toEqual({ ok: true });
+    }
+    const companyDeleted = await request(server)
+      .delete(`/v1/companies/${companyId}`)
+      .set('Cookie', cookie);
+    expect(companyDeleted.body).toEqual({ ok: true });
+  });
 });

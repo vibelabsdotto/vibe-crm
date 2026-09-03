@@ -36,6 +36,8 @@ export type Deal = {
   id: string;
   name: string;
   contact_id: string | null;
+  company_id: string | null;
+  product_id: string | null;
   value: number;
   stage: string;
   close_date: string;
@@ -44,6 +46,7 @@ export type Deal = {
   updated_at: string;
   contact_name?: string;
   company_name?: string;
+  product_name?: string;
   [key: string]: unknown;
 };
 
@@ -121,6 +124,48 @@ export type Stats = {
   companies: number;
   deals: number;
   dealValue: number;
+};
+
+export type Product = {
+  key: string;
+  name: string;
+  type: string;
+  status: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SubscriptionStatus = "active" | "trial" | "paused" | "cancelled" | "expired";
+export type SubscriptionInterval = "monthly" | "quarterly" | "yearly" | "one_time";
+
+export type Subscription = {
+  id: string;
+  company_id: string | null;
+  contact_id: string | null;
+  product_id: string | null;
+  name: string;
+  amount: number;
+  currency: string;
+  interval: SubscriptionInterval;
+  start_date: string;
+  end_date: string;
+  status: SubscriptionStatus;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  company_name?: string;
+  product_name?: string;
+  [key: string]: unknown;
+};
+
+export type SubscriptionSummary = {
+  mrr: number;
+  active: number;
+  trial: number;
+  paused: number;
+  total: number;
+  byProduct: { product: string; productName: string; mrr: number; active: number }[];
 };
 
 /** Listen-Antworten defensiv auspacken (Envelope oder Array). */

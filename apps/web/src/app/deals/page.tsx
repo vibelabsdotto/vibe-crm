@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
-import { asList, type Contact, type Deal, type Stage } from "@/lib/types";
+import { asList, type Company, type Contact, type Deal, type Product, type Stage } from "@/lib/types";
 import { DealsBoard } from "./deals-board";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export const metadata = { title: "Deals" };
 export default async function DealsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stage?: string }>;
+  searchParams: Promise<{ stage?: string; product?: string }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/sign-in?redirect=%2Fdeals");
@@ -21,20 +21,25 @@ export default async function DealsPage({
   let deals: Deal[] = [];
   let stages: Stage[] = [];
   let contacts: Contact[] = [];
+  let companies: Company[] = [];
+  let products: Product[] = [];
   let error: string | null = null;
 
   try {
     const jar = await cookies();
     const cookie = jar.toString();
-    const stageQ = params.stage ? `?stage=${encodeURIComponent(params.stage)}` : "";
-    const [boardData, stagesData, contactsData] = await Promise.all([
-      apiFetch<unknown>(`/v1/deals/board${stageQ}`, { cookie }),
+    const [boardData, stagesData, contactsData, companiesData, productsData] = await Promise.all([
+      apiFetch<unknown>("/v1/deals/board", { cookie }),
       apiFetch<unknown>("/v1/stages", { cookie }),
       apiFetch<unknown>("/v1/contacts?limit=100", { cookie }),
+      apiFetch<unknown>("/v1/companies?limit=100", { cookie }),
+      apiFetch<unknown>("/v1/products", { cookie }),
     ]);
     deals = asList<Deal>(boardData, "deals");
     stages = asList<Stage>(stagesData, "stages");
     contacts = asList<Contact>(contactsData, "contacts");
+    companies = asList<Company>(companiesData, "companies");
+    products = asList<Product>(productsData, "products");
   } catch (e) {
     error =
       e instanceof ApiError
@@ -53,7 +58,15 @@ export default async function DealsPage({
           <p>{error}</p>
         </div>
       ) : (
-        <DealsBoard deals={deals} stages={stages} contacts={contacts} />
+        <DealsBoard
+          deals={deals}
+          stages={stages}
+          contacts={contacts}
+          companies={companies}
+          products={products}
+          initialStage={params.stage ?? ""}
+          initialProduct={params.product ?? ""}
+        />
       )}
     </div>
   );

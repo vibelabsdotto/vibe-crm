@@ -1,10 +1,10 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
-import type { Contact, Deal, Stage } from "@/lib/types";
+import type { Company, Contact, Deal, Product, Stage } from "@/lib/types";
 
 function eur(value: number): string {
   return new Intl.NumberFormat("de-DE", {
@@ -16,10 +16,14 @@ function eur(value: number): string {
 
 function DealDialog({
   contacts,
+  companies,
+  products,
   stages,
   onClose,
 }: {
   contacts: Contact[];
+  companies: Company[];
+  products: Product[];
   stages: Stage[];
   onClose: () => void;
 }) {
@@ -29,6 +33,8 @@ function DealDialog({
   const [value, setValue] = useState("");
   const [stage, setStage] = useState(stages[0]?.key ?? "");
   const [contactId, setContactId] = useState("");
+  const [companyId, setCompanyId] = useState("");
+  const [productId, setProductId] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,6 +55,8 @@ function DealDialog({
           value: value === "" ? 0 : Number(value),
           stage: stage || undefined,
           contact_id: contactId || null,
+          company_id: companyId || null,
+          product_id: productId || null,
           notes: notes.trim(),
         },
       });
@@ -92,6 +100,30 @@ function DealDialog({
               </select>
             </label>
           </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" style={{ marginTop: 12 }}>
+            <label className="field" style={{ margin: 0 }}>
+              <span className="field-label">Firma</span>
+              <select className="select" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+                <option value="">— keine —</option>
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field" style={{ margin: 0 }}>
+              <span className="field-label">Produkt</span>
+              <select className="select" value={productId} onChange={(e) => setProductId(e.target.value)}>
+                <option value="">— keines —</option>
+                {products.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <label className="field" style={{ marginTop: 12 }}>
             <span className="field-label">Kontakt</span>
             <select className="select" value={contactId} onChange={(e) => setContactId(e.target.value)}>
@@ -130,28 +162,55 @@ export function DealsBoard({
   deals,
   stages,
   contacts,
+  companies,
+  products,
+  initialStage,
+  initialProduct,
 }: {
   deals: Deal[];
   stages: Stage[];
   contacts: Contact[];
+  companies: Company[];
+  products: Product[];
+  initialStage: string;
+  initialProduct: string;
 }) {
   const api = useApi();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
-  const [stageFilter, setStageFilter] = useState(searchParams.get("stage") ?? "");
+  const [stageFilter, setStageFilter] = useState(initialStage);
+  const [productFilter, setProductFilter] = useState(initialProduct);
 
   const ordered = useMemo(() => [...stages].sort((a, b) => a.position - b.position), [stages]);
+
+  const filteredDeals = useMemo(
+    () => (productFilter ? deals.filter((d) => d.product_id === productFilter) : deals),
+    [deals, productFilter],
+  );
+
   const visibleStages = useMemo(
     () => (stageFilter ? ordered.filter((s) => s.key === stageFilter) : ordered),
     [ordered, stageFilter],
   );
 
+  function pushFilters(nextStage: string, nextProduct: string) {
+    const q = new URLSearchParams();
+    if (nextStage) q.set("stage", nextStage);
+    if (nextProduct) q.set("product", nextProduct);
+    const qs = q.toString();
+    router.push(`/deals${qs ? `?${qs}` : ""}`);
+  }
+
   function applyStageFilter(value: string) {
     setStageFilter(value);
-    router.push(`/deals${value ? `?stage=${encodeURIComponent(value)}` : ""}`);
+    pushFilters(value, productFilter);
+  }
+
+  function applyProductFilter(value: string) {
+    setProductFilter(value);
+    pushFilters(stageFilter, value);
   }
 
   async function move(deal: Deal, nextStage: string) {
@@ -179,7 +238,7 @@ export function DealsBoard({
     }
   }
 
-  const totalValue = deals.reduce((sum, d) => sum + (d.value ?? 0), 0);
+  const totalValue = filteredDeals.reduce((sum, d) => sum + (d.value ?? 0), 0);
 
   return (
     <div className="stack">
@@ -198,8 +257,22 @@ export function DealsBoard({
             </option>
           ))}
         </select>
+        <select
+          className="select"
+          style={{ maxWidth: 220 }}
+          value={productFilter}
+          onChange={(e) => applyProductFilter(e.target.value)}
+          aria-label="Produkt filtern"
+        >
+          <option value="">Alle Produkte</option>
+          {products.map((p) => (
+            <option key={p.key} value={p.key}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         <span className="small muted">
-          {deals.length} Deals · {eur(totalValue)}
+          {filteredDeals.length} Deals · {eur(totalValue)}
         </span>
         <div style={{ flex: 1 }} />
         <button type="button" className="btn btn-accent" onClick={() => setCreateOpen(true)}>
@@ -222,7 +295,7 @@ export function DealsBoard({
           {/* Board: Spalten stapeln auf Mobile (Contract §5) */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {visibleStages.map((s) => {
-              const column = deals.filter((d) => d.stage === s.key);
+              const column = filteredDeals.filter((d) => d.stage === s.key);
               const columnValue = column.reduce((sum, d) => sum + (d.value ?? 0), 0);
               return (
                 <section key={s.key} className="card" aria-label={s.label}>
@@ -240,9 +313,15 @@ export function DealsBoard({
                           <strong>{d.name}</strong>
                           <span className="small">{eur(d.value ?? 0)}</span>
                         </div>
-                        {(d.contact_name || d.company_name) && (
+                        {(d.contact_name || d.company_name || d.product_name) && (
                           <p className="small muted" style={{ margin: "4px 0" }}>
-                            {[String(d.contact_name ?? ""), String(d.company_name ?? "")].filter(Boolean).join(" · ")}
+                            {[
+                              String(d.contact_name ?? ""),
+                              String(d.company_name ?? ""),
+                              String(d.product_name ?? ""),
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </p>
                         )}
                         <div className="row" style={{ marginTop: 8 }}>
@@ -282,11 +361,14 @@ export function DealsBoard({
                   <th scope="col" className="hidden lg:table-cell">
                     Kontakt
                   </th>
+                  <th scope="col" className="hidden lg:table-cell">
+                    Produkt
+                  </th>
                   <th scope="col">Wert</th>
                 </tr>
               </thead>
               <tbody>
-                {deals.map((d) => (
+                {filteredDeals.map((d) => (
                   <tr key={d.id}>
                     <td>
                       <strong>{d.name}</strong>
@@ -297,6 +379,7 @@ export function DealsBoard({
                     <td className="hidden lg:table-cell muted small">
                       {[String(d.contact_name ?? ""), String(d.company_name ?? "")].filter(Boolean).join(" · ") || "—"}
                     </td>
+                    <td className="hidden lg:table-cell muted small">{String(d.product_name ?? "") || "—"}</td>
                     <td>{eur(d.value ?? 0)}</td>
                   </tr>
                 ))}
@@ -306,7 +389,15 @@ export function DealsBoard({
         </>
       )}
 
-      {createOpen && <DealDialog contacts={contacts} stages={ordered} onClose={() => setCreateOpen(false)} />}
+      {createOpen && (
+        <DealDialog
+          contacts={contacts}
+          companies={companies}
+          products={products}
+          stages={ordered}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
     </div>
   );
 }
