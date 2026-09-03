@@ -22,6 +22,10 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 RUN npm ci --omit=dev --workspace apps/api \
   && npm cache clean --force
+# npm hoistet je nach Tree alles ins Root — dann fehlt apps/api/node_modules
+# und das COPY unten würde fehlschlagen. Leeres Verzeichnis ist ok (Require
+# löst über /app/node_modules auf).
+RUN mkdir -p /app/apps/api/node_modules
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production \
