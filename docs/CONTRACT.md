@@ -141,7 +141,7 @@ List-Query: `?page&limit(≤100)&sort&order&search&filters` (`filters` = JSON `[
 | PUT | `/v1/deals/:id` | partiell (inkl. `company_id`, `product_id`); Stage-Wechsel → `stage_change`-Activity (`won`/`lost`-Text); → 200 |
 | DELETE | `/v1/deals/:id` | → `{ ok: true }` |
 | GET | `/v1/deals/board` | alle Deals `ORDER BY created_at ASC` → `{ deals }` (Gruppierung clientseitig) |
-| GET/POST | `/v1/products` | Liste (name-asc) / `{key? (default Slug aus name), name!, type?, status?, notes?}` → 201 (409 Key-Dup) |
+| GET/POST | `/v1/products` | Liste (name-asc) / `{key? (default Slug aus name; Format `[a-z][a-z0-9_-]*`), name!, type?, status?, notes?}` → 201 (409 Key-Dup) |
 | PUT/DELETE | `/v1/products/:key` | `name/type/status/notes` / DELETE → `{ ok: true }`, 409 solange Deals/Subscriptions referenzieren |
 | GET/POST | `/v1/subscriptions` | `?status=&company_id=&product=` → `{ subscriptions, total, page, limit }` (+Company-/Produkt-Extras) / `{company_id?, contact_id?, product_id? (muss existieren, sonst 400), name!, amount?, currency?, interval?, start_date?, end_date?, status?, notes?}` → 201 |
 | PUT/DELETE | `/v1/subscriptions/:id` | partiell → 200; DELETE → `{ ok: true }` |

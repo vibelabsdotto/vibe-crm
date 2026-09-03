@@ -15,7 +15,7 @@ export type { Product, ProductBody, ProductListQuery };
 
 export const PRODUCT_TYPES = ['product', 'service', 'other'] as const;
 
-const PRODUCT_KEY_RE = /^[a-z][a-z0-9_]*$/;
+const PRODUCT_KEY_RE = /^[a-z][a-z0-9_-]*$/;
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
@@ -56,7 +56,7 @@ export class ProductsService {
     const key = rawKey || slugify(name);
     if (!PRODUCT_KEY_RE.test(key)) {
       throw new BadRequestException(
-        `Invalid product key "${key}" — use lowercase letters, digits, and underscores (must start with a letter).`,
+        `Invalid product key "${key}" — use lowercase letters, digits, underscores, and hyphens (must start with a letter).`,
       );
     }
     const type = body.type === undefined ? 'product' : str(body.type);
