@@ -14,6 +14,9 @@ Port von OpenCRM v4 (`/tmp/opencrm-audit`, Hono + D1) auf den VibeLabs-Stack.
 - **Activity**: Timeline-Eintrag (`contact|company|deal` × `note|email|meeting|stage_change`).
 - **Custom Field**: User-definiertes Feld = echte Spalte auf der Entity-Tabelle + Registry-Row.
 - **API-Token**: Personal Access Token für CLI/Agents, Format `vc_<48 hex>` (Prefix `vc_`).
+- **Product**: Produkt/Leistung (`key`-Slug, z.B. `daze`), aus Notion-Projects geseedet. Deals und Subscriptions hängen optional dran.
+- **Subscription**: Laufender Vertrag (Retainer/Abo): Firma + Produkt + Betrag + Intervall + Zeitraum + Status. Antwort auf wiederkehrende Kundenzahlungen — Notion-Cashflow kennt nur Einzelbuchungen (`Recurring` überall false), das CRM wird das führende Retainer-System.
+- **MRR**: Monthly Recurring Revenue = Summe über `active|trial`-Subscriptions: monthly=amount, quarterly=amount/3, yearly=amount/12, one_time=0.
 - **Tenant-Modell v1: Single-Workspace.** Jede authentifizierte Identität (Session ODER Token) hat volles CRUD auf alle Daten. Kein Row-Ownership, kein Sharing.
 
 ## 2. Storage — SQLite (drizzle + better-sqlite3, Datei `/data/vibe-crm.sqlite` in Prod, `./data/vibe-crm.sqlite` lokal)
@@ -41,8 +44,31 @@ Von Better Auth verwaltet (Drizzle-Adapter). Nicht manuell verändern.
 ### Tabelle `deals`
 
 `id` PK (UUID), `name` TEXT NOT NULL, `contact_id` TEXT NULL → `contacts(id) ON DELETE SET NULL`,
+`company_id` TEXT NULL → `companies(id) ON DELETE SET NULL` (direkt, nicht nur geerbt — Seed aus Notion kennt oft nur die Firma),
+`product_id` TEXT NULL → `products(key) ON DELETE SET NULL`,
 `value` REAL NOT NULL DEFAULT `0`, `stage` TEXT NOT NULL DEFAULT `'prospect'` (muss `stages.key` sein, sonst 400 + gültige Keys),
 `close_date`/`notes` TEXT DEFAULT `''`, `created_at`/`updated_at` ISO-8601.
+
+### Tabelle `products`
+
+`key` TEXT PRIMARY KEY (Slug, z.B. `daze`), `name` TEXT NOT NULL,
+`type` TEXT NOT NULL DEFAULT `'product'` (`product|service|other`),
+`status` TEXT NOT NULL DEFAULT `''` (frei, Notion-Status wird übernommen),
+`notes` TEXT NOT NULL DEFAULT `''`, `created_at`/`updated_at` ISO-8601.
+Seed aus Notion-Projects. DELETE → 409 `{ error: 'conflict' }` solange Deals/Subscriptions referenzieren (kein Reassign — Produkt erst umhängen).
+
+### Tabelle `subscriptions`
+
+`id` PK (UUID), `company_id` TEXT NULL → `companies(id) ON DELETE SET NULL`,
+`contact_id` TEXT NULL → `contacts(id) ON DELETE SET NULL`,
+`product_id` TEXT NULL → `products(key) ON DELETE SET NULL`,
+`name` TEXT NOT NULL (z.B. `DAZE Monatspauschale`),
+`amount` REAL NOT NULL DEFAULT `0`, `currency` TEXT NOT NULL DEFAULT `'EUR'`,
+`interval` TEXT NOT NULL DEFAULT `'monthly'` (`monthly|quarterly|yearly|one_time`, sonst 400),
+`start_date`/`end_date` TEXT DEFAULT `''` (ISO-Datum, end leer = unbefristet),
+`status` TEXT NOT NULL DEFAULT `'active'` (`active|trial|paused|cancelled|expired`, sonst 400),
+`notes` TEXT DEFAULT `''`, `created_at`/`updated_at` ISO-8601.
+Indizes `(company_id)`, `(status)`.
 
 ### Tabelle `stages`
 
@@ -110,11 +136,16 @@ List-Query: `?page&limit(≤100)&sort&order&search&filters` (`filters` = JSON `[
 | PUT | `/v1/contacts/:id` | partiell → 200 |
 | DELETE | `/v1/contacts/:id` | → `{ ok: true }`; Deals bleiben (`contact_id=NULL`) |
 | GET | `/v1/contacts/:id` | einzelner Kontakt + Company-Extras; 404 |
-| GET | `/v1/deals` | `?stage=`; Search name/notes; +`total_value`; Kontakt/Company-Extras |
-| POST | `/v1/deals` | `{name!, contact_id?, value?, stage? (default erste Stage), close_date?, notes?, custom?}` → 201 |
-| PUT | `/v1/deals/:id` | partiell; Stage-Wechsel → `stage_change`-Activity (`won`/`lost`-Text); → 200 |
+| GET | `/v1/deals` | `?stage=&product=`; Search name/notes; +`total_value`; Kontakt/Company-Extras (+`product_id`, `company_id`) |
+| POST | `/v1/deals` | `{name!, contact_id?, company_id?, product_id? (muss existieren, sonst 400), value?, stage? (default erste Stage), close_date?, notes?, custom?}` → 201 |
+| PUT | `/v1/deals/:id` | partiell (inkl. `company_id`, `product_id`); Stage-Wechsel → `stage_change`-Activity (`won`/`lost`-Text); → 200 |
 | DELETE | `/v1/deals/:id` | → `{ ok: true }` |
 | GET | `/v1/deals/board` | alle Deals `ORDER BY created_at ASC` → `{ deals }` (Gruppierung clientseitig) |
+| GET/POST | `/v1/products` | Liste (name-asc) / `{key? (default Slug aus name), name!, type?, status?, notes?}` → 201 (409 Key-Dup) |
+| PUT/DELETE | `/v1/products/:key` | `name/type/status/notes` / DELETE → `{ ok: true }`, 409 solange Deals/Subscriptions referenzieren |
+| GET/POST | `/v1/subscriptions` | `?status=&company_id=&product=` → `{ subscriptions, total, page, limit }` (+Company-/Produkt-Extras) / `{company_id?, contact_id?, product_id? (muss existieren, sonst 400), name!, amount?, currency?, interval?, start_date?, end_date?, status?, notes?}` → 201 |
+| PUT/DELETE | `/v1/subscriptions/:id` | partiell → 200; DELETE → `{ ok: true }` |
+| GET | `/v1/subscriptions/summary` | `{ mrr, active, trial, paused, total, byProduct: [{ product, productName, mrr, active }] }` (MRR-Regel §1) |
 | GET/POST | `/v1/stages` | Liste (position-asc) / `{label!, key?, color?, position?, is_won?, is_lost?}` → 201 (409 Key-Dup) |
 | PUT/DELETE | `/v1/stages/:key` | alles außer `key` / `?reassign_to=` Pflicht bei belegten Stages (409 sonst); letzte Stage nicht löschbar |
 | GET/POST | `/v1/custom-fields` | `?entity=` → `{ defs }` / `{entity_type!, key!, label!, field_type?, options?, position?}` → 201 |
@@ -129,7 +160,8 @@ Stage-Löschen mit Deals ohne `reassign_to` → 409. `DELETE company/contact` ka
 
 ## 5. Web (Next.js 16.3, App Router, Port 3000)
 
-- Routes: `/` (Dashboard: Stats + Pipeline-Summary), `/contacts`, `/contacts/:id` (Detail + Timeline), `/companies`, `/deals` (Board + Tabelle), `/settings/properties` (Custom Fields), `/settings/tokens` (API-Keys), `/sign-in`, `/sign-up`.
+- Routes: `/` (Dashboard: Stats + Pipeline-Summary + MRR), `/contacts`, `/contacts/:id` (Detail + Timeline), `/companies`, `/deals` (Board + Tabelle, `?product=`-Filter), `/subscriptions` (Summary-Cards + Tabelle), `/settings/properties` (Custom Fields), `/settings/products` (Produkt-CRUD), `/settings/tokens` (API-Keys), `/sign-in`, `/sign-up`.
+- Sidebar: + Item „Abos" (`Repeat`-Icon, Badge aktive Subscriptions).
 - Shell: Sidebar (`collapsible="offcanvas"`, vibevision-Pattern) + sticky Header mit `SidebarTrigger` + mobile Bottom-Nav (`md:hidden`, 4 Kernziele). Sidebar-Badges: offene Deals (Anzahl nicht-gewonnen/verloren).
 - Tabellen (Contacts/Companies): Sekundärspalten `hidden sm/md/lg:table-cell` + Card-Grid-Fallback + `overflow-x-auto`. Deals-Board: Spalten stapeln auf Mobile, dnd-kit optional (Select-Wechsel genügt v1).
 - Theme: Tailwind v4, Dark-Mode via Klasse + `@custom-variant dark`, Brand-HEX aus vibeplans (`--coral #FF7A5C, --teal #2CCABB, --amber #EFBB63, --danger #F1646B, --bg #0B0C0E, --surface-2 #1C1D21, --border #232529, --text #F2F2F2`), Fonts Inter + Space Grotesk + JetBrains Mono, Buttons `min-h-11` (44px Touch).
@@ -141,12 +173,22 @@ Stage-Löschen mit Deals ohne `reassign_to` → 409. `DELETE company/contact` ka
 - Instance-Precedence: `--instance > CRM_INSTANCE > ./.crm/crm.json > ~/.config/vibe-crm/config.json`.
 - Keys: `./.crm/instances.json | ~/.config/vibe-crm/instances.json`, `Record<host, { apiKey, email?, savedAt? }>`, mkdir 0o700 / file 0o600, Anzeige nur redacted.
 - Auth: `auth login --instance <url> --token <vc_…>` (Key aus Web `/settings/tokens` kopiert; verify via `GET /health` + `GET /v1/stats`) — KEIN Password-Flow (Single-Workspace, Token genügt). `auth whoami`, `auth logout`, `health` (ohne Key).
-- Befehle: `contacts [--search] [--status] [--limit]`, `contact show|add|update|rm`, `companies`, `company add|update|rm`, `deals [--stage]`, `deal add|move|rm`, `pipeline`, `stages`, `activity log|list`, `import contacts|companies <file.csv|json> [--dry-run]`, `tokens create|ls|revoke` (braucht Session-Login? nein — Token-Auth genügt, Self-Service).
+- Befehle: `contacts [--search] [--status] [--limit]`, `contact show|add|update|rm`, `companies`, `company add|update|rm`, `deals [--stage] [--product]`, `deal add|update|move|rm` (`--product`, `--company`), `pipeline`, `stages`, `products`, `product add|rm`, `subscriptions [--status] [--product]`, `subscription add|update|cancel|rm`, `mrr` (Summary), `activity log|list`, `import contacts|companies <file.csv|json> [--dry-run]`, `import notion <seed.json> [--dry-run]` (Notion-Export seeden, idempotent per Name/Key), `tokens create|ls|revoke` (Token-Auth genügt, Self-Service).
 - `--json` → rohes Objekt, sonst humane Tabelle/Einzeiler. Fehler: `✗`-Prefix, exit 1.
 
 ## 7. Ops
 
-- Repo `vibelabsdotto/vibe-crm` (privat), 2 Coolify-Apps auf `hostinger`, `vibe-crm-web` (`https://crm.vibelabs.to`, 3000) + `vibe-crm-api` (`https://api-crm.vibelabs.to`, 3100). DNS: Wildcard deckt ab, kein Record nötig.
+- Repo `vibelabsdotto/vibe-crm` (public), 2 Coolify-Apps auf `hostinger`, `vibe-crm-web` (`https://crm.vibelabs.to`, 3000) + `vibe-crm-api` (`https://api-crm.vibelabs.to`, 3100). DNS: Wildcard deckt ab, kein Record nötig.
 - API-Env: `PORT=3100, DATABASE_PATH=/data/vibe-crm.sqlite, WEB_BASE_URL, CORS_ORIGIN=https://crm.vibelabs.to, BETTER_AUTH_SECRET, GOOGLE_* (optional)` + Coolify Persistent Storage → `/data`.
 - Web-Build-Args: `NEXT_PUBLIC_API_URL=https://api-crm.vibelabs.to, NEXT_PUBLIC_WEB_URL=https://crm.vibelabs.to`.
 - Gates pro Lane: `typecheck` → `lint` → `test` → `build` grün. Prod-E2E: Health, Auth (Session + Token), CRUD je Entity, Board, Import, CLI gegen Prod-Instance.
+
+## 9. Notion-Seed (Stand 2026-09-03, DBs: Leads 55, Projects 27, Cashflow 52, Sources 3)
+
+Seed-Format: JSON `{ products[], companies[], contacts[], deals[], subscriptions[] }`, eingespielt via `vibe-crm import notion` (idempotent: Company-Dedupe per Name case-insensitiv, Product-Upsert per Key, Deals/Subscriptions Dedupe per Name+Company).
+
+- **Products**: alle 27 Notion-Projects (key = Slug aus Name, type aus Notion-Type gemappt Product→product sonst other, status = Notion-Status, inkl. archived — Status bleibt sichtbar).
+- **Companies/Contacts**: alle 55 Leads. Company `{name, email, phone, notes: "Notion-Lead • <Status> • Quelle/Details…"}`. Contact wo Contact Person gesetzt (erster Name gesplittet, Rest in notes; mehrere Nummern: erste ins phone-Feld, Rest notes). Contact-Status: Won→`active`, Lost/Unqualified→`churned`, Rest→`lead`. Last Contact/Next Action → Activity-Notes an Company (nicht an Contact — Timeline hängt an beiden, Company ist stabiler).
+- **Lead-Status → Stage**: Won→`won`, Lost/Unqualified→`lost`, Proposal Sent→`proposal`, Replied/Meeting Scheduled/Qualified Opportunity→`qualified`, New/Researching/Ready for Outreach/Outreach Sent/Follow-Up Due→`prospect` (`negotiation` bleibt manueller Nutzung vorbehalten). Original-Status steht in Company-Notes + Seed-Activity.
+- **Deals**: nur für fortgeschrittene Leads (Proposal Sent, Qualified Opportunity, Meeting Scheduled, Won, Lost): Name `{Company} – DAZE`, `product_id: daze`, `company_id` (+`contact_id` wo vorhanden), value 0 (unbekannt), close_date leer.
+- **Subscriptions (Annahmen, aus Cashflow-Titel-Muster abgeleitet — Max bestätigt)**: `DAZE – HUEG` (LAUSITZER HÜGELLAND AGRAR AG, 90 EUR monthly, active, start 2024-11-18), `DAZE – HAAG` (Harslebener Agrargenossenschaft eG, 74.25 EUR monthly, active, start 2025-11-14). MRR danach ≈ 164.25 €. Cashflow-Einzelbuchungen werden NICHT migriert (Buchhaltung bleibt Notion).
