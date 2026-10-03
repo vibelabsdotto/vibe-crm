@@ -8,6 +8,7 @@ import { AuthProviderToken } from './auth/auth.constants';
 import { createAuth } from './auth/auth';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { LocalAccountController } from './auth/local-account.controller';
 import { CompaniesModule } from './companies/companies.module';
 import { ContactsController } from './contacts/contacts.controller';
 import { ContactsService } from './contacts/contacts.service';
@@ -38,6 +39,7 @@ import { TokensController } from './tokens/tokens.controller';
   ],
   controllers: [
     HealthController,
+    LocalAccountController,
     StatsController,
     ContactsController,
     DealsController,

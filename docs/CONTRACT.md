@@ -23,7 +23,7 @@ Port von OpenCRM v4 (`/tmp/opencrm-audit`, Hono + D1) auf den VibeLabs-Stack.
 
 ### Tabellen `user`, `session`, `account`, `verification` (Better Auth)
 
-Von Better Auth verwaltet (Drizzle-Adapter). Nicht manuell verändern.
+Von Better Auth verwaltet (Drizzle-Adapter). Nicht manuell verändern, mit einer engen Ausnahme für den lokalen Entwicklungsmodus: `user.id=vibe-crm-local-development`, `email=local@vibe-crm.invalid` wird beim API-Start idempotent angelegt. Für diese Identität gibt es weder Zugangsdaten noch Session-Cookies oder einen OAuth-Account. Bestehende Benutzer werden nicht übernommen oder verändert.
 
 ### Tabelle `companies`
 
@@ -109,6 +109,8 @@ Better-Auth-Handler als Express-Middleware unter `/api/auth/*` (VOR dem Nest-Rou
 Guard: globaler `APP_GUARD` + `@Public()` für `/health`. Fehler: `401 { error: 'unauthorized' }`.
 `BETTER_AUTH_SECRET` fehlt/Platzhalter → Boot-Fail.
 
+Lokaler Webzugang: `LOCAL_WEB_ACCOUNT=true` ist ausschließlich mit `NODE_ENV=development` und einer wörtlichen Loopback-Origin für `WEB_BASE_URL` erlaubt. Die API bindet in diesem Modus an `127.0.0.1`. Nur direkte Loopback-Requests mit Loopback-Host und fehlender oder exakt passender Web-Origin erhalten nach Session-/Token-Prüfung die persistierte lokale Identität. Weitergeleitete API-Requests sind ausgeschlossen. `GET /v1/local-account` liefert `{ user: { id, email, name, local: true } }` mit `Cache-Control: no-store`, andernfalls 404. Eine aktive Fehlkonfiguration bricht den Start ab. Die Web-App aktiviert diesen serverseitigen Fallback nur in Development mit Loopback-API-/Web-Origins und passendem eingehenden Host/Origin. Es gibt keine Google-Anmeldeoption in der Web-Oberfläche.
+
 ## 4. API (NestJS, Prefix `/v1`, Port lokal `3100`)
 
 Alle Responses JSON. Fehler flach `{ error: string }`. Codes: `unauthorized` 401, `not_found` 404, `bad_request` 400, `conflict` 409, `unprocessable` 422 (`{ error, unknown_fields, valid_fields }`), `payload_too_large` 413, `rate_limited` 429, `internal_error` 500.
@@ -162,9 +164,9 @@ Stage-Löschen mit Deals ohne `reassign_to` → 409. `DELETE company/contact` ka
 
 - Routes: `/` (Dashboard: Stats + Pipeline-Summary + MRR), `/contacts`, `/contacts/:id` (Detail + Timeline), `/companies`, `/deals` (Board + Tabelle, `?product=`-Filter), `/subscriptions` (Summary-Cards + Tabelle), `/settings/properties` (Custom Fields), `/settings/products` (Produkt-CRUD), `/settings/tokens` (API-Keys), `/sign-in`, `/sign-up`.
 - Sidebar: + Item „Abos" (`Repeat`-Icon, Badge aktive Subscriptions).
-- Shell: Sidebar (`collapsible="offcanvas"`, vibevision-Pattern) + sticky Header mit `SidebarTrigger` + mobile Bottom-Nav (`md:hidden`, 4 Kernziele). Sidebar-Badges: offene Deals (Anzahl nicht-gewonnen/verloren).
+- Shell: Sidebar (`collapsible="icon"`) ohne Topbar. Einstellungen als scrollbares Footer-Menü mit eigenen Einträgen für Produkte, Custom Fields und API-Tokens direkt über dem Benutzerbereich; Theme-Wechsel als Icon daneben. Mobile Bottom-Nav (`md:hidden`) öffnet die Sidebar über „Mehr“, Navigation schließt das Sheet. Sidebar-Badges: offene Deals (Anzahl nicht-gewonnen/verloren) und aktive Abos.
 - Tabellen (Contacts/Companies): Sekundärspalten `hidden sm/md/lg:table-cell` + Card-Grid-Fallback + `overflow-x-auto`. Deals-Board: Spalten stapeln auf Mobile, dnd-kit optional (Select-Wechsel genügt v1).
-- Theme: Tailwind v4, Dark-Mode via Klasse + `@custom-variant dark`, Brand-HEX aus vibeplans (`--coral #FF7A5C, --teal #2CCABB, --amber #EFBB63, --danger #F1646B, --bg #0B0C0E, --surface-2 #1C1D21, --border #232529, --text #F2F2F2`), Fonts Inter + Space Grotesk + JetBrains Mono, Buttons `min-h-11` (44px Touch).
+- Theme: Tailwind v4, Dark-Mode via Klasse + `@custom-variant dark`, neutrale semantische Tokens aus der OpenFibu-Produkt-App. shadcn `base-nova` auf Base UI, Geist Sans + Geist Mono. Screens verwenden gemeinsame Komponenten statt Legacy-Klassen wie `btn`, `input` oder `card`.
 - API-Client: `apiFetch` (Bearer + Cookie-Passthrough serverseitig), `NEXT_PUBLIC_API_URL` (Build-Arg), `NEXT_PUBLIC_WEB_URL`.
 - Kein `?agent=true`-Modus. Keine Fumadocs. `export const dynamic = "force-dynamic"` auf allen Seiten mit Session-Zugriff.
 

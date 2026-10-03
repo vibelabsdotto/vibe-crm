@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   Logger,
+  OnApplicationBootstrap,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -9,10 +10,22 @@ import { eq } from 'drizzle-orm';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { DatabaseService } from '../database/database.service';
-import { apiTokens, session as sessionTable, user } from '../database/schema';
+import {
+  account,
+  apiTokens,
+  session as sessionTable,
+  user,
+} from '../database/schema';
 import { AuthProviderToken } from './auth.constants';
 import type { AuthContext } from './auth.types';
 import type { Auth } from './auth';
+import {
+  isLocalAccountRequest,
+  LOCAL_ACCOUNT_EMAIL,
+  LOCAL_ACCOUNT_ID,
+  localWebAccountOrigin,
+  type LocalAccountUser,
+} from './local-account';
 
 export const API_TOKEN_PATTERN = /^vc_[0-9a-f]{48}$/;
 
@@ -36,8 +49,9 @@ type ApiTokenRow = typeof apiTokens.$inferSelect;
 const LAST_USED_THROTTLE_MS = 60_000;
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AuthService.name);
+  private readonly localAccountOrigin: string | null;
 
   /** In-memory throttle cache for token last_used_at updates. */
   private readonly lastUsedCache = new Map<string, number>();
@@ -47,6 +61,7 @@ export class AuthService {
     config: ConfigService,
     @Inject(AuthProviderToken) auth?: Auth,
   ) {
+    this.localAccountOrigin = localWebAccountOrigin(config);
     // Fail fast on a missing/placeholder secret instead of silently
     // starting with unsigned sessions (contract §3).
     const secret = config.get<string>('BETTER_AUTH_SECRET');
@@ -60,20 +75,78 @@ export class AuthService {
 
   private auth?: Auth;
 
+  get localAccountEnabled(): boolean {
+    return this.localAccountOrigin !== null;
+  }
+
+  // All module initialization, including DB migrations, finishes before this hook.
+  onApplicationBootstrap(): void {
+    if (!this.localAccountEnabled) return;
+    if (!this.database.isReady)
+      throw new Error('Local account requires a ready database');
+    this.database.db.transaction((db) => {
+      const now = new Date();
+      db.insert(user)
+        .values({
+          id: LOCAL_ACCOUNT_ID,
+          email: LOCAL_ACCOUNT_EMAIL,
+          name: 'Lokaler Entwicklungsaccount',
+          emailVerified: false,
+          image: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({ target: user.id })
+        .run();
+      if (!this.readLocalAccount()) {
+        throw new Error(
+          'Reserved local identity conflicts with an existing auth account',
+        );
+      }
+    });
+  }
+
+  getLocalAccount(request: Request): LocalAccountUser | null {
+    if (!isLocalAccountRequest(request, this.localAccountOrigin)) return null;
+    return this.readLocalAccount();
+  }
+
+  private readLocalAccount(): LocalAccountUser | null {
+    const row = this.database.db
+      .select()
+      .from(user)
+      .where(eq(user.id, LOCAL_ACCOUNT_ID))
+      .get();
+    if (!row || row.email !== LOCAL_ACCOUNT_EMAIL) return null;
+    // A real signup/OAuth identity must never become the implicit local account.
+    const credential = this.database.db
+      .select({ id: account.id })
+      .from(account)
+      .where(eq(account.userId, row.id))
+      .get();
+    if (credential) return null;
+    return { id: row.id, email: row.email, name: row.name, local: true };
+  }
+
   /**
    * Verification order per contract §3:
    * 1. Better-Auth session cookie (`auth.api.getSession`, join fallback),
-   * 2. API token (`Authorization: Bearer *** Single-workspace: the
-   * identity is just { email, via } — no ownership.
-   * Returns null when neither mechanism authenticates.
+   * 2. API token (Authorization: Bearer),
+   * 3. Explicit dev-only, direct-loopback account from the persisted user row.
+   * Single-workspace identity is just { email, via }, with no ownership.
+   * Returns null when no mechanism authenticates.
    */
   async authenticate(request: Request): Promise<AuthContext | null> {
     const sessionContext = await this.authenticateSession(request.headers);
     if (sessionContext) return sessionContext;
 
     const header = request.header('authorization');
-    if (!header?.startsWith('Bearer ')) return null;
-    return this.authenticateApiToken(header.slice(7).trim());
+    if (header?.startsWith('Bearer ')) {
+      const tokenContext = this.authenticateApiToken(header.slice(7).trim());
+      if (tokenContext) return tokenContext;
+    }
+    const local = this.getLocalAccount(request);
+    return local ? { email: local.email, via: 'session' } : null;
   }
 
   /** Attaches the mounted Better Auth handler (wired in app.module.ts). */

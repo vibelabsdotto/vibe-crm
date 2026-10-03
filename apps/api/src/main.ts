@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { toNodeHandler } from 'better-auth/node';
 import { AppModule } from './app.module';
 import { AuthProviderToken } from './auth/auth.constants';
+import { AuthService } from './auth/auth.service';
 import type { Auth } from './auth/auth';
 import { JsonExceptionFilter } from './http/json-exception.filter';
 
@@ -58,7 +59,11 @@ async function bootstrap(): Promise<void> {
   app.useGlobalFilters(new JsonExceptionFilter());
 
   app.enableShutdownHooks();
-  await app.listen(config.get<number>('PORT') ?? 3100, '0.0.0.0');
+  // The auth service validates the opt-in configuration before enabling this bind.
+  const host = app.get(AuthService).localAccountEnabled
+    ? '127.0.0.1'
+    : '0.0.0.0';
+  await app.listen(config.get<number>('PORT') ?? 3100, host);
 }
 
 void bootstrap();

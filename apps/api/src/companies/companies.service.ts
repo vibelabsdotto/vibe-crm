@@ -177,11 +177,18 @@ export class CompaniesService {
   }
 
   remove(id: string): { ok: boolean } {
-    const res = this.database.sqlite
-      .prepare('DELETE FROM companies WHERE id = ?')
-      .run(id);
-    if ((res.changes ?? 0) === 0) throw new NotFoundException('not_found');
-    return { ok: true };
+    return this.database.sqlite.transaction(() => {
+      // The historical ADD COLUMN migration omitted ON DELETE SET NULL for
+      // deals.company_id. Preserve the contract without rebuilding CRM tables.
+      this.database.sqlite
+        .prepare('UPDATE deals SET company_id = NULL WHERE company_id = ?')
+        .run(id);
+      const res = this.database.sqlite
+        .prepare('DELETE FROM companies WHERE id = ?')
+        .run(id);
+      if ((res.changes ?? 0) === 0) throw new NotFoundException('not_found');
+      return { ok: true };
+    })();
   }
 
   private require(id: string): Company {
