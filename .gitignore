@@ -13,4 +13,5 @@ data/
 .DS_Store
 .hermes/
 .agents/
+skills-lock.json
 .crm/
