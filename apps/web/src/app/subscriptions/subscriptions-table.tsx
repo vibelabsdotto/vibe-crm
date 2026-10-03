@@ -1,26 +1,48 @@
 "use client";
 
+import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState, useTransition } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
-import type {
-  Company,
-  Product,
-  Subscription,
-  SubscriptionInterval,
-  SubscriptionStatus,
-} from "@/lib/types";
+import type { Company, Product, Subscription, SubscriptionInterval, SubscriptionStatus } from "@/lib/types";
 
-const STATUSES: SubscriptionStatus[] = ["active", "trial", "paused", "cancelled", "expired"];
-const INTERVALS: SubscriptionInterval[] = ["monthly", "quarterly", "yearly", "one_time"];
+const STATUS_ITEMS: { value: SubscriptionStatus; label: string }[] = [
+  { value: "active", label: "Aktiv" },
+  { value: "trial", label: "Testphase" },
+  { value: "paused", label: "Pausiert" },
+  { value: "cancelled", label: "Gekündigt" },
+  { value: "expired", label: "Abgelaufen" },
+];
+const INTERVAL_ITEMS: { value: SubscriptionInterval; label: string }[] = [
+  { value: "monthly", label: "Monatlich" },
+  { value: "quarterly", label: "Vierteljährlich" },
+  { value: "yearly", label: "Jährlich" },
+  { value: "one_time", label: "Einmalig" },
+];
 
-function eur(value: number): string {
-  return new Intl.NumberFormat("de-DE", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 2,
-  }).format(value);
+function amount(value: number, currency: string): string {
+  return `${new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)} ${currency || "EUR"}`;
+}
+
+function statusLabel(value: SubscriptionStatus): string {
+  return STATUS_ITEMS.find((item) => item.value === value)?.label ?? value;
+}
+
+function intervalLabel(value: SubscriptionInterval): string {
+  return INTERVAL_ITEMS.find((item) => item.value === value)?.label ?? value;
 }
 
 type FormState = {
@@ -38,65 +60,82 @@ type FormState = {
 
 function emptyForm(): FormState {
   return {
-    name: "",
-    company_id: "",
-    product_id: "",
-    amount: "",
-    currency: "EUR",
-    interval: "monthly",
-    status: "active",
-    start_date: "",
-    end_date: "",
-    notes: "",
+    name: "", company_id: "", product_id: "", amount: "", currency: "EUR",
+    interval: "monthly", status: "active", start_date: "", end_date: "", notes: "",
   };
 }
 
-function formFromSub(s: Subscription): FormState {
+function formFromSub(subscription: Subscription): FormState {
   return {
-    name: s.name,
-    company_id: s.company_id ?? "",
-    product_id: s.product_id ?? "",
-    amount: String(s.amount ?? 0),
-    currency: s.currency || "EUR",
-    interval: s.interval,
-    status: s.status,
-    start_date: s.start_date ?? "",
-    end_date: s.end_date ?? "",
-    notes: s.notes ?? "",
+    name: subscription.name,
+    company_id: subscription.company_id ?? "",
+    product_id: subscription.product_id ?? "",
+    amount: String(subscription.amount ?? 0),
+    currency: subscription.currency || "EUR",
+    interval: subscription.interval,
+    status: subscription.status,
+    start_date: subscription.start_date ?? "",
+    end_date: subscription.end_date ?? "",
+    notes: subscription.notes ?? "",
   };
+}
+
+function SubscriptionSelectField<Value extends string>({
+  id, label, items, value, onValueChange, disabled = false,
+}: {
+  id: string;
+  label: string;
+  items: { value: Value; label: string }[];
+  value: Value;
+  onValueChange: (value: Value) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Field data-disabled={disabled} className="min-w-0">
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Select items={items} value={value} onValueChange={(next) => { if (next !== null) onValueChange(next); }} disabled={disabled}>
+        <SelectTrigger id={id} className="w-full min-w-0"><SelectValue className="min-w-0" /></SelectTrigger>
+        <SelectContent><SelectGroup>
+          {items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+        </SelectGroup></SelectContent>
+      </Select>
+    </Field>
+  );
 }
 
 function SubscriptionDialog({
-  companies,
-  products,
-  initial,
-  editId,
-  onClose,
+  companies, products, initial, editId, onClose, finalFocus,
 }: {
   companies: Company[];
   products: Product[];
   initial: FormState;
   editId: string | null;
   onClose: () => void;
+  finalFocus: () => HTMLElement | null;
 }) {
   const api = useApi();
   const router = useRouter();
   const [form, setForm] = useState<FormState>(initial);
   const [error, setError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
 
-  function set<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((f) => ({ ...f, [key]: value }));
+  function set<Key extends keyof FormState>(key: Key, value: FormState[Key]) {
+    setForm((current) => ({ ...current, [key]: value }));
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (inFlight.current) return;
     if (!form.name.trim()) {
-      setError("Name ist Pflicht.");
+      setNameError("Gib einen Namen für das Abo ein.");
       return;
     }
+    inFlight.current = true;
     setBusy(true);
     setError(null);
+    setNameError(null);
     const body = {
       name: form.name.trim(),
       company_id: form.company_id || null,
@@ -115,148 +154,104 @@ function SubscriptionDialog({
       } else {
         await api("/v1/subscriptions", { method: "POST", body });
       }
+      toast.add({ title: editId ? "Abo gespeichert" : "Abo angelegt", type: "success" });
       router.refresh();
       onClose();
-    } catch (err) {
-      setError(err instanceof ApiError ? `Speichern fehlgeschlagen: ${err.code}` : "Speichern fehlgeschlagen");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? `Speichern fehlgeschlagen: ${cause.code}` : "Speichern fehlgeschlagen.");
+      inFlight.current = false;
       setBusy(false);
     }
   }
 
+  const companyItems = [{ value: "", label: "Keine Firma" }, ...companies.map((item) => ({ value: item.id, label: item.name }))];
+  const productItems = [{ value: "", label: "Kein Produkt" }, ...products.map((item) => ({ value: item.key, label: item.name }))];
+  if (form.company_id && !companyItems.some((item) => item.value === form.company_id)) companyItems.push({ value: form.company_id, label: "Zugeordnete Firma" });
+  if (form.product_id && !productItems.some((item) => item.value === form.product_id)) productItems.push({ value: form.product_id, label: "Zugeordnetes Produkt" });
+
   return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <div className="dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <h2>{editId ? "Abo bearbeiten" : "Abo anlegen"}</h2>
-        <form onSubmit={submit}>
-          <label className="field">
-            <span className="field-label">Name *</span>
-            <input
-              className="input"
-              value={form.name}
-              onChange={(e) => set("name", e.target.value)}
-              required
-              autoFocus
-              placeholder="z. B. DAZE Monatspauschale"
-            />
-          </label>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Firma</span>
-              <select className="select" value={form.company_id} onChange={(e) => set("company_id", e.target.value)}>
-                <option value="">— keine —</option>
-                {companies.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Produkt</span>
-              <select className="select" value={form.product_id} onChange={(e) => set("product_id", e.target.value)}>
-                <option value="">— keines —</option>
-                {products.map((p) => (
-                  <option key={p.key} value={p.key}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" style={{ marginTop: 12 }}>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Betrag</span>
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.amount}
-                onChange={(e) => set("amount", e.target.value)}
-              />
-            </label>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Währung</span>
-              <input className="input" value={form.currency} onChange={(e) => set("currency", e.target.value)} maxLength={8} />
-            </label>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Intervall</span>
-              <select
-                className="select"
-                value={form.interval}
-                onChange={(e) => set("interval", e.target.value as SubscriptionInterval)}
-              >
-                {INTERVALS.map((i) => (
-                  <option key={i} value={i}>
-                    {i}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" style={{ marginTop: 12 }}>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Status</span>
-              <select
-                className="select"
-                value={form.status}
-                onChange={(e) => set("status", e.target.value as SubscriptionStatus)}
-              >
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Start</span>
-              <input
-                className="input"
-                type="date"
-                value={form.start_date}
-                onChange={(e) => set("start_date", e.target.value)}
-              />
-            </label>
-            <label className="field" style={{ margin: 0 }}>
-              <span className="field-label">Ende (leer = unbefristet)</span>
-              <input
-                className="input"
-                type="date"
-                value={form.end_date}
-                onChange={(e) => set("end_date", e.target.value)}
-              />
-            </label>
-          </div>
-          <label className="field">
-            <span className="field-label">Notizen</span>
-            <textarea className="textarea" value={form.notes} onChange={(e) => set("notes", e.target.value)} />
-          </label>
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <button type="button" className="btn" onClick={onClose}>
-              Abbrechen
-            </button>
-            <button type="submit" className="btn btn-accent" disabled={busy}>
-              {busy ? "Speichert…" : "Speichern"}
-            </button>
-          </div>
+    <Dialog open onOpenChange={(open, details) => {
+      if (!open) {
+        if (inFlight.current) details.cancel();
+        else onClose();
+      }
+    }} disablePointerDismissal={busy}>
+      <DialogContent showCloseButton={false} finalFocus={finalFocus} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{editId ? "Abo bearbeiten" : "Abo anlegen"}</DialogTitle>
+          <DialogDescription>Verwalte Zuordnung, Betrag, Laufzeit und Status des Abos.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-w-0 flex-col gap-6" aria-busy={busy}>
+          <FieldSet disabled={busy}>
+            <FieldGroup>
+              <Field data-disabled={busy} data-invalid={!!nameError}>
+                <FieldLabel htmlFor="subscription-name">Name *</FieldLabel>
+                <Input id="subscription-name" value={form.name} onChange={(event) => { set("name", event.target.value); setNameError(null); }} required placeholder="z. B. Monatspauschale" aria-invalid={!!nameError} aria-describedby={nameError ? "subscription-name-error" : undefined} />
+                {nameError && <FieldError id="subscription-name-error">{nameError}</FieldError>}
+              </Field>
+              <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <SubscriptionSelectField id="subscription-company" label="Firma" value={form.company_id} onValueChange={(value) => set("company_id", value)} items={companyItems} disabled={busy} />
+                <SubscriptionSelectField id="subscription-product" label="Produkt" value={form.product_id} onValueChange={(value) => set("product_id", value)} items={productItems} disabled={busy} />
+              </FieldGroup>
+              <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="subscription-amount">Betrag</FieldLabel>
+                  <Input id="subscription-amount" type="number" min="0" step="0.01" value={form.amount} onChange={(event) => set("amount", event.target.value)} />
+                </Field>
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="subscription-currency">Währung</FieldLabel>
+                  <Input id="subscription-currency" value={form.currency} onChange={(event) => set("currency", event.target.value)} maxLength={8} />
+                </Field>
+                <SubscriptionSelectField id="subscription-interval" label="Intervall" value={form.interval} onValueChange={(value) => set("interval", value)} items={INTERVAL_ITEMS} disabled={busy} />
+              </FieldGroup>
+              <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <SubscriptionSelectField id="subscription-status" label="Status" value={form.status} onValueChange={(value) => set("status", value)} items={STATUS_ITEMS} disabled={busy} />
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="subscription-start">Start</FieldLabel>
+                  <Input id="subscription-start" type="date" value={form.start_date} onChange={(event) => set("start_date", event.target.value)} />
+                </Field>
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="subscription-end">Ende</FieldLabel>
+                  <Input id="subscription-end" type="date" value={form.end_date} onChange={(event) => set("end_date", event.target.value)} aria-describedby="subscription-end-hint" />
+                  <FieldDescription id="subscription-end-hint">Leer lassen für ein unbefristetes Abo.</FieldDescription>
+                </Field>
+              </FieldGroup>
+              <Field data-disabled={busy}>
+                <FieldLabel htmlFor="subscription-notes">Notizen</FieldLabel>
+                <Textarea id="subscription-notes" value={form.notes} onChange={(event) => set("notes", event.target.value)} rows={3} />
+              </Field>
+            </FieldGroup>
+          </FieldSet>
+          {error && <Alert variant="destructive"><AlertTitle>Abo nicht gespeichert</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" disabled={busy} />}>Abbrechen</DialogClose>
+            <Button type="submit" disabled={busy}>{busy ? "Speichert…" : "Speichern"}</Button>
+          </DialogFooter>
         </form>
-      </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type SubscriptionAction = "cancel" | "remove";
+
+function SubscriptionActions({ subscription, disabled, onEdit, onAction }: {
+  subscription: Subscription;
+  disabled: boolean;
+  onEdit: (subscription: Subscription, opener: HTMLButtonElement) => void;
+  onAction: (subscription: Subscription, action: SubscriptionAction, opener: HTMLButtonElement) => void;
+}) {
+  const canCancel = subscription.status === "active" || subscription.status === "trial" || subscription.status === "paused";
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="outline" size="sm" disabled={disabled} aria-label={`Abo ${subscription.name} bearbeiten`} onClick={(event) => onEdit(subscription, event.currentTarget)}>Bearbeiten</Button>
+      {canCancel && <Button type="button" variant="outline" size="sm" disabled={disabled} aria-label={`Abo ${subscription.name} kündigen`} onClick={(event) => onAction(subscription, "cancel", event.currentTarget)}>Kündigen</Button>}
+      <Button type="button" variant="destructive" size="icon-sm" disabled={disabled} aria-label={`Abo ${subscription.name} löschen`} onClick={(event) => onAction(subscription, "remove", event.currentTarget)}><Trash2Icon /></Button>
     </div>
   );
 }
 
-export function SubscriptionsTable({
-  subscriptions,
-  companies,
-  products,
-  initialStatus,
-}: {
+export function SubscriptionsTable({ subscriptions, companies, products, initialStatus }: {
   subscriptions: Subscription[];
   companies: Company[];
   products: Product[];
@@ -265,179 +260,142 @@ export function SubscriptionsTable({
   const api = useApi();
   const router = useRouter();
   const [dialog, setDialog] = useState<{ initial: FormState; editId: string | null } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ subscription: Subscription; action: SubscriptionAction } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [filterPending, startFilterTransition] = useTransition();
+  const inFlight = useRef(false);
+  const createButton = useRef<HTMLButtonElement | null>(null);
+  const formOpener = useRef<HTMLButtonElement | null>(null);
+  const actionOpener = useRef<HTMLButtonElement | null>(null);
+  const cancelButton = useRef<HTMLButtonElement | null>(null);
 
   function applyStatusFilter(value: string) {
-    router.push(`/subscriptions${value ? `?status=${encodeURIComponent(value)}` : ""}`);
+    startFilterTransition(() => router.push(`/subscriptions${value ? `?status=${encodeURIComponent(value)}` : ""}`, { scroll: false }));
   }
 
-  async function cancel(sub: Subscription) {
-    if (!window.confirm(`Abo „${sub.name}“ kündigen (Status → cancelled)?`)) return;
+  function edit(subscription: Subscription, opener: HTMLButtonElement) {
+    formOpener.current = opener;
+    setDialog({ initial: formFromSub(subscription), editId: subscription.id });
+  }
+
+  function confirm(subscription: Subscription, action: SubscriptionAction, opener: HTMLButtonElement) {
+    actionOpener.current = opener;
+    setError(null);
+    setConfirmation({ subscription, action });
+  }
+
+  async function executeAction() {
+    if (!confirmation || inFlight.current) return;
+    const { subscription, action } = confirmation;
+    inFlight.current = true;
+    setBusy(true);
     setError(null);
     try {
-      await api(`/v1/subscriptions/${encodeURIComponent(sub.id)}`, {
-        method: "PUT",
-        body: { status: "cancelled" },
-      });
+      if (action === "cancel") {
+        await api(`/v1/subscriptions/${encodeURIComponent(subscription.id)}`, {
+          method: "PUT",
+          body: { status: "cancelled" },
+        });
+      } else {
+        await api(`/v1/subscriptions/${encodeURIComponent(subscription.id)}`, { method: "DELETE" });
+      }
+      toast.add({ title: action === "cancel" ? "Abo gekündigt" : "Abo gelöscht", type: "success" });
+      // Both actions can remove the row or its opener from the current filter.
+      actionOpener.current = null;
+      setConfirmation(null);
       router.refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? `Kündigen fehlgeschlagen: ${e.code}` : "Kündigen fehlgeschlagen");
+    } catch (cause) {
+      const label = action === "cancel" ? "Kündigen" : "Löschen";
+      setError(cause instanceof ApiError ? `${label} fehlgeschlagen: ${cause.code}` : `${label} fehlgeschlagen.`);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   }
 
-  async function remove(sub: Subscription) {
-    if (!window.confirm(`Abo „${sub.name}“ wirklich löschen?`)) return;
-    setError(null);
-    try {
-      await api(`/v1/subscriptions/${encodeURIComponent(sub.id)}`, { method: "DELETE" });
-      router.refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? `Löschen fehlgeschlagen: ${e.code}` : "Löschen fehlgeschlagen");
-    }
-  }
+  const rowBusy = busy || filterPending;
+  const isRemoval = confirmation?.action === "remove";
 
   return (
-    <div className="stack">
-      <div className="row">
-        <select
-          className="select"
-          style={{ maxWidth: 220 }}
-          value={initialStatus}
-          onChange={(e) => applyStatusFilter(e.target.value)}
-          aria-label="Status filtern"
-        >
-          <option value="">Alle Status</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <span className="small muted">{subscriptions.length} Abos</span>
-        <div style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn btn-accent"
-          onClick={() => setDialog({ initial: emptyForm(), editId: null })}
-        >
-          + Abo
-        </button>
+    <div className="flex min-w-0 flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+        <FieldGroup className="w-full max-w-full sm:w-56 sm:shrink-0">
+          <SubscriptionSelectField id="subscription-status-filter" label="Status filtern" value={initialStatus} onValueChange={applyStatusFilter} items={[{ value: "", label: "Alle Status" }, ...STATUS_ITEMS]} disabled={rowBusy} />
+        </FieldGroup>
+        <p className="text-sm text-muted-foreground" role="status">{filterPending ? "Filter wird geladen…" : `${subscriptions.length} Abos in der Auswahl`}</p>
+        <Button ref={createButton} type="button" disabled={rowBusy} className="sm:ml-auto" onClick={(event) => { formOpener.current = event.currentTarget; setDialog({ initial: emptyForm(), editId: null }); }}><PlusIcon data-icon="inline-start" />Abo anlegen</Button>
       </div>
 
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-
       {subscriptions.length === 0 ? (
-        <div className="card">
-          <p className="muted">Keine Abos vorhanden.</p>
-        </div>
+        <Empty className="border"><EmptyHeader>
+          <EmptyTitle>{initialStatus ? "Keine Abos für diesen Status" : "Keine Abos vorhanden"}</EmptyTitle>
+          <EmptyDescription>{initialStatus ? "Wähle einen anderen Status oder lege ein neues Abo an." : "Lege ein Abo an, um wiederkehrende Beträge und Laufzeiten zu verwalten."}</EmptyDescription>
+        </EmptyHeader></Empty>
       ) : (
         <>
-          {/* Card-Grid-Fallback auf Mobile (Contract §5) */}
-          <div className="grid grid-cols-1 gap-3 md:hidden">
-            {subscriptions.map((s) => (
-              <article key={s.id} className="card">
-                <div className="row" style={{ justifyContent: "space-between" }}>
-                  <strong>{s.name}</strong>
-                  <span className="badge">{s.status}</span>
+          <div className="grid min-w-0 grid-cols-1 gap-4 md:hidden" aria-busy={filterPending}>
+            {subscriptions.map((subscription) => <Card key={subscription.id} className="min-w-0">
+              <CardHeader>
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                  <CardTitle className="min-w-0 break-words"><h2>{subscription.name}</h2></CardTitle>
+                  <Badge variant={subscription.status === "active" ? "secondary" : "outline"}>{statusLabel(subscription.status)}</Badge>
                 </div>
-                <p className="small muted" style={{ margin: "4px 0" }}>
-                  {[String(s.company_name ?? ""), String(s.product_name ?? "")]
-                    .filter(Boolean)
-                    .join(" · ") || "—"}
-                </p>
-                <p style={{ margin: "4px 0" }}>
-                  {eur(s.amount ?? 0)} {s.currency} · {s.interval}
-                </p>
-                <div className="row" style={{ marginTop: 8 }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => setDialog({ initial: formFromSub(s), editId: s.id })}
-                  >
-                    Bearbeiten
-                  </button>
-                  <button type="button" className="btn btn-sm btn-danger" onClick={() => remove(s)}>
-                    Löschen
-                  </button>
-                </div>
-              </article>
-            ))}
+                <CardDescription className="break-words">{[subscription.company_name, subscription.product_name].filter(Boolean).join(" · ") || "Keine Firma oder kein Produkt zugeordnet"}</CardDescription>
+              </CardHeader>
+              <CardContent><p className="font-medium tabular-nums">{amount(subscription.amount ?? 0, subscription.currency)}</p><p className="text-sm text-muted-foreground">{intervalLabel(subscription.interval)}</p></CardContent>
+              <CardFooter><SubscriptionActions subscription={subscription} disabled={rowBusy} onEdit={edit} onAction={confirm} /></CardFooter>
+            </Card>)}
           </div>
 
-          <div className="card hidden overflow-x-auto p-0 md:block" style={{ padding: 0 }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col" className="hidden lg:table-cell">
-                    Firma
-                  </th>
-                  <th scope="col" className="hidden lg:table-cell">
-                    Produkt
-                  </th>
-                  <th scope="col">Betrag</th>
-                  <th scope="col" className="hidden sm:table-cell">
-                    Intervall
-                  </th>
-                  <th scope="col">Status</th>
-                  <th scope="col" />
-                </tr>
-              </thead>
-              <tbody>
-                {subscriptions.map((s) => (
-                  <tr key={s.id}>
-                    <td>
-                      <strong>{s.name}</strong>
-                    </td>
-                    <td className="hidden lg:table-cell muted small">{String(s.company_name ?? "") || "—"}</td>
-                    <td className="hidden lg:table-cell muted small">{String(s.product_name ?? "") || "—"}</td>
-                    <td>
-                      {eur(s.amount ?? 0)} {s.currency}
-                    </td>
-                    <td className="hidden sm:table-cell muted small">{s.interval}</td>
-                    <td>
-                      <span className="badge">{s.status}</span>
-                    </td>
-                    <td>
-                      <div className="row">
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() => setDialog({ initial: formFromSub(s), editId: s.id })}
-                        >
-                          Bearbeiten
-                        </button>
-                        {(s.status === "active" || s.status === "trial" || s.status === "paused") && (
-                          <button type="button" className="btn btn-sm" onClick={() => cancel(s)}>
-                            Kündigen
-                          </button>
-                        )}
-                        <button type="button" className="btn btn-sm btn-danger" onClick={() => remove(s)}>
-                          ×
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Card className="hidden min-w-0 md:flex">
+            <CardHeader><CardTitle><h2>Abo-Übersicht</h2></CardTitle><CardDescription>Beträge, Intervalle und Status der aktuellen Auswahl.</CardDescription></CardHeader>
+            <CardContent>
+              <Table aria-label="Abos der aktuellen Auswahl" aria-busy={filterPending}>
+                <TableHeader><TableRow>
+                  <TableHead scope="col">Name</TableHead>
+                  <TableHead scope="col" className="hidden lg:table-cell">Firma</TableHead>
+                  <TableHead scope="col" className="hidden xl:table-cell">Produkt</TableHead>
+                  <TableHead scope="col" className="text-right">Betrag</TableHead>
+                  <TableHead scope="col" className="hidden xl:table-cell">Intervall</TableHead>
+                  <TableHead scope="col">Status</TableHead>
+                  <TableHead scope="col">Aktionen</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>{subscriptions.map((subscription) => <TableRow key={subscription.id}>
+                  <TableCell><span className="font-medium">{subscription.name}</span></TableCell>
+                  <TableCell className="hidden lg:table-cell">{subscription.company_name || "Nicht zugeordnet"}</TableCell>
+                  <TableCell className="hidden xl:table-cell">{subscription.product_name || "Nicht zugeordnet"}</TableCell>
+                  <TableCell className="text-right tabular-nums">{amount(subscription.amount ?? 0, subscription.currency)}</TableCell>
+                  <TableCell className="hidden xl:table-cell">{intervalLabel(subscription.interval)}</TableCell>
+                  <TableCell><Badge variant={subscription.status === "active" ? "secondary" : "outline"}>{statusLabel(subscription.status)}</Badge></TableCell>
+                  <TableCell><SubscriptionActions subscription={subscription} disabled={rowBusy} onEdit={edit} onAction={confirm} /></TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
       )}
 
-      {dialog && (
-        <SubscriptionDialog
-          companies={companies}
-          products={products}
-          initial={dialog.initial}
-          editId={dialog.editId}
-          onClose={() => setDialog(null)}
-        />
-      )}
+      {dialog && <SubscriptionDialog companies={companies} products={products} initial={dialog.initial} editId={dialog.editId} onClose={() => setDialog(null)} finalFocus={() => formOpener.current?.isConnected ? formOpener.current : createButton.current} />}
+
+      <Dialog open={confirmation !== null} onOpenChange={(open, details) => {
+        if (!open) {
+          if (inFlight.current) details.cancel();
+          else setConfirmation(null);
+        }
+      }} disablePointerDismissal={busy}>
+        <DialogContent showCloseButton={false} initialFocus={cancelButton} finalFocus={() => actionOpener.current?.isConnected ? actionOpener.current : createButton.current}>
+          <DialogHeader>
+            <DialogTitle>{isRemoval ? "Abo löschen?" : "Abo kündigen?"}</DialogTitle>
+            <DialogDescription className="break-words">{isRemoval ? `Das Abo „${confirmation?.subscription.name}“ wird dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.` : `Das Abo „${confirmation?.subscription.name}“ erhält den Status „Gekündigt“. Der Datensatz bleibt erhalten.`}</DialogDescription>
+          </DialogHeader>
+          {error && <Alert variant="destructive"><AlertTitle>{isRemoval ? "Abo nicht gelöscht" : "Abo nicht gekündigt"}</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+          <DialogFooter>
+            <DialogClose render={<Button ref={cancelButton} type="button" variant="outline" disabled={busy} />}>Abbrechen</DialogClose>
+            <Button type="button" variant={isRemoval ? "destructive" : "default"} disabled={busy} onClick={() => { void executeAction(); }}>{busy ? (isRemoval ? "Löscht…" : "Kündigt…") : (isRemoval ? "Abo löschen" : "Abo kündigen")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,60 +1,47 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BottomNav } from "@/components/bottom-nav";
-import { SiteHeader } from "@/components/site-header";
+
 import { ThemeProvider } from "@/components/theme-provider";
-import { Sidebar, SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/toast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { getSession } from "@/lib/server-auth";
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: "700",
-  variable: "--font-space-grotesk",
-});
-
-const jetBrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains",
-});
+const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
+const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
-  title: {
-    default: "Vibe CRM",
-    template: "%s · Vibe CRM",
-  },
-  description: "Vibe CRM — Kontakte, Firmen, Deals.",
+  title: { default: "Vibe CRM", template: "%s · Vibe CRM" },
+  description: "Kontakte, Firmen, Deals und Abonnements verwalten.",
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const session = await getSession();
 
   return (
     <html lang="de" suppressHydrationWarning>
-      <body className={`${inter.variable} ${spaceGrotesk.variable} ${jetBrainsMono.variable}`}>
+      <body className={`${geist.variable} ${geistMono.variable} font-sans antialiased`}>
         <ThemeProvider>
-          {session ? (
-            <SidebarProvider>
-              <Sidebar>
-                <AppSidebar />
-              </Sidebar>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <SiteHeader userEmail={session.user.email} />
-                <main className="min-w-0 flex-1 pb-20 md:pb-0">{children}</main>
-                <BottomNav />
-              </div>
-            </SidebarProvider>
-          ) : (
-            <div className="flex min-h-svh w-full flex-col bg-background text-foreground">
-              <main className="min-w-0 flex-1">{children}</main>
-            </div>
-          )}
+          <Toaster>
+            <TooltipProvider>
+              <a href="#main-content" className="sr-only fixed top-2 left-2 z-50 rounded-md bg-background px-4 py-2 text-sm ring-2 ring-ring focus:not-sr-only">Zum Inhalt springen</a>
+              {session ? (
+                <SidebarProvider className="h-svh min-h-0 overflow-hidden">
+                  <AppSidebar user={session.user} />
+                  <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+
+                    <div id="main-content" tabIndex={-1} className="min-h-0 min-w-0 flex-1 overflow-auto outline-none">{children}</div>
+                    <BottomNav />
+                  </SidebarInset>
+                </SidebarProvider>
+              ) : (
+                <main id="main-content" className="min-h-svh min-w-0 bg-background text-foreground" tabIndex={-1}>{children}</main>
+              )}
+            </TooltipProvider>
+          </Toaster>
         </ThemeProvider>
       </body>
     </html>

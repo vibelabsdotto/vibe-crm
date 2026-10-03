@@ -1,6 +1,12 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import { asList, type Deal, type Stage, type Stats, type SubscriptionSummary } from "@/lib/types";
@@ -9,11 +15,7 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Dashboard" };
 
 function eur(value: number): string {
-  return new Intl.NumberFormat("de-DE", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(value);
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
 }
 
 export default async function DashboardPage() {
@@ -43,10 +45,7 @@ export default async function DashboardPage() {
       summary = null;
     }
   } catch (e) {
-    error =
-      e instanceof ApiError
-        ? `API-Fehler ${e.status}: ${e.code}`
-        : "API nicht erreichbar. Läuft apps/api auf Port 3100?";
+    error = e instanceof ApiError ? `API-Fehler ${e.status}: ${e.code}` : "API nicht erreichbar. Läuft apps/api auf Port 3100?";
   }
 
   const closedKeys = new Set(stages.filter((s) => s.is_won === 1 || s.is_lost === 1).map((s) => s.key));
@@ -61,91 +60,89 @@ export default async function DashboardPage() {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Dashboard</h1>
-        <div className="row">
-          <Link href="/contacts" className="btn">
-            Kontakt anlegen
-          </Link>
-          <Link href="/deals" className="btn btn-accent">
-            Deal anlegen
-          </Link>
+    <div className="mx-auto flex w-full max-w-7xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Kontakte, Pipeline und Abos im Überblick.</p>
         </div>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/contacts" className={buttonVariants({ variant: "outline" })}>Kontakt anlegen</Link>
+          <Link href="/deals" className={buttonVariants()}>Deal anlegen</Link>
+        </div>
+      </header>
 
       {error || !stats ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error ?? "Keine Daten."}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Fehler beim Laden</AlertTitle>
+          <AlertDescription>{error ?? "Keine Daten."}</AlertDescription>
+        </Alert>
       ) : (
-        <div className="stack">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <div className="stat-card">
-              <div className="stat-value">{stats.contacts}</div>
-              <div className="stat-label">Kontakte</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{stats.companies}</div>
-              <div className="stat-label">Firmen</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{openDeals.length}</div>
-              <div className="stat-label">Offene Deals</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{eur(stats.dealValue)}</div>
-              <div className="stat-label">Deal-Volumen</div>
-            </div>
-            <Link href="/subscriptions" prefetch={false} className="stat-card hover:no-underline">
-              <div className="stat-value">{summary ? eur(summary.mrr) : "—"}</div>
-              <div className="stat-label">MRR</div>
+        <div className="flex min-w-0 flex-col gap-6">
+          <section aria-label="Kennzahlen" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {[
+              { label: "Kontakte", value: stats.contacts },
+              { label: "Firmen", value: stats.companies },
+              { label: "Offene Deals", value: openDeals.length },
+              { label: "Deal-Volumen", value: eur(stats.dealValue) },
+            ].map(({ label, value }) => (
+              <Card key={label}>
+                <CardHeader><CardDescription>{label}</CardDescription></CardHeader>
+                <CardContent><p className="break-words text-2xl font-semibold tracking-tight tabular-nums">{value}</p></CardContent>
+              </Card>
+            ))}
+            <Link href="/subscriptions" prefetch={false} className="rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+              <Card className="h-full">
+                <CardHeader><CardDescription>MRR</CardDescription></CardHeader>
+                <CardContent><p className="break-words text-2xl font-semibold tracking-tight tabular-nums">{summary ? eur(summary.mrr) : "—"}</p></CardContent>
+              </Card>
             </Link>
-          </div>
+          </section>
 
-          <div className="card">
-            <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>Pipeline</h2>
-              <Link href="/deals" className="btn btn-sm">
-                Zum Board
-              </Link>
-            </div>
-            {stages.length === 0 ? (
-              <p className="muted small">Keine Stages vorhanden.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Stage</th>
-                      <th scope="col" className="hidden sm:table-cell">
-                        Deals
-                      </th>
-                      <th scope="col">Volumen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+          <Card>
+            <CardHeader>
+              <CardTitle><h2>Pipeline</h2></CardTitle>
+              <CardDescription>Deals und Volumen nach Stage.</CardDescription>
+              <CardAction><Link href="/deals" className={buttonVariants({ variant: "outline", size: "sm" })}>Zum Board</Link></CardAction>
+            </CardHeader>
+            <CardContent>
+              {stages.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>Keine Stages vorhanden</EmptyTitle>
+                    <EmptyDescription>Die Pipeline hat noch keine Stages.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead scope="col">Stage</TableHead>
+                      <TableHead scope="col" className="hidden sm:table-cell">Deals</TableHead>
+                      <TableHead scope="col" className="text-right">Volumen</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {stages.map((s) => {
                       const bucket = byStage.get(s.key);
                       return (
-                        <tr key={s.key}>
-                          <td>
-                            <Link href="/deals" prefetch={false}>
-                              {s.label}
-                            </Link>{" "}
-                            <span className="badge-dim badge">{bucket?.deals.length ?? 0}</span>
-                          </td>
-                          <td className="hidden sm:table-cell muted">{bucket?.deals.length ?? 0}</td>
-                          <td>{eur(bucket?.value ?? 0)}</td>
-                        </tr>
+                        <TableRow key={s.key}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Link href="/deals" prefetch={false} className="rounded-sm font-medium outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">{s.label}</Link>
+                              <Badge variant="secondary">{bucket?.deals.length ?? 0}</Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell className="hidden tabular-nums sm:table-cell">{bucket?.deals.length ?? 0}</TableCell>
+                          <TableCell className="text-right tabular-nums">{eur(bucket?.value ?? 0)}</TableCell>
+                        </TableRow>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>

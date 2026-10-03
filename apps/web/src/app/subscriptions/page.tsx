@@ -1,5 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import {
@@ -60,38 +62,39 @@ export default async function SubscriptionsPage({
   }
 
   return (
-    <div className="page" style={{ maxWidth: 1280 }}>
-      <div className="page-head">
-        <h1>Abos</h1>
-      </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Abos</h1>
+        <p className="text-sm text-muted-foreground">Verwalte wiederkehrende Beträge, Laufzeiten und den Status deiner Abos.</p>
+      </header>
       {error || !summary ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error ?? "Keine Daten."}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Abos konnten nicht geladen werden</AlertTitle>
+          <AlertDescription>{error ?? "Keine Daten."}</AlertDescription>
+        </Alert>
       ) : (
-        <div className="stack">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <div className="stat-card">
-              <div className="stat-value">{eur(summary.mrr)}</div>
-              <div className="stat-label">MRR</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{summary.active}</div>
-              <div className="stat-label">Aktiv</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{summary.trial}</div>
-              <div className="stat-label">Trial</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{summary.paused}</div>
-              <div className="stat-label">Pausiert</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{summary.total}</div>
-              <div className="stat-label">Gesamt</div>
-            </div>
+        <div className="flex min-w-0 flex-col gap-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5" aria-label="Abo-Kennzahlen">
+            <Card className="min-w-0">
+              <CardHeader><CardTitle>MRR</CardTitle></CardHeader>
+              <CardContent><p className="break-words text-2xl font-semibold tabular-nums">{eur(summary.mrr)}</p></CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardHeader><CardTitle>Aktiv</CardTitle></CardHeader>
+              <CardContent><p className="text-2xl font-semibold tabular-nums">{summary.active}</p></CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardHeader><CardTitle>Testphase</CardTitle></CardHeader>
+              <CardContent><p className="text-2xl font-semibold tabular-nums">{summary.trial}</p></CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardHeader><CardTitle>Pausiert</CardTitle></CardHeader>
+              <CardContent><p className="text-2xl font-semibold tabular-nums">{summary.paused}</p></CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardHeader><CardTitle>Gesamt</CardTitle></CardHeader>
+              <CardContent><p className="text-2xl font-semibold tabular-nums">{summary.total}</p></CardContent>
+            </Card>
           </div>
 
           <SubscriptionsTable

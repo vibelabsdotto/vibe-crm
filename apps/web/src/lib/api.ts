@@ -37,8 +37,12 @@ export async function apiFetch<T>(path: string, opts: ApiFetchOptions = {}): Pro
   if (!res.ok) {
     let code = res.statusText || "error";
     try {
-      const data = (await res.json()) as { error?: string };
-      if (data.error) code = data.error;
+      const data = (await res.json()) as { error?: unknown };
+      if (typeof data.error === "string" && data.error) {
+        // Existing Nest conflict envelopes use their display label. Translate
+        // only that known label; unknown 409 codes keep their own meaning.
+        code = res.status === 409 && data.error === "Conflict" ? "conflict" : data.error;
+      }
     } catch {
       // kein JSON-Body — Statuscode reicht
     }

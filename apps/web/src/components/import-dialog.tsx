@@ -1,9 +1,16 @@
 "use client";
 
-import { Upload, X } from "lucide-react";
+import { Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -119,7 +126,9 @@ export function ImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [reading, setReading] = useState(false);
+  const selectionVersion = useRef(0);
+  const id = useId();
   const api = useApi();
   const router = useRouter();
 
@@ -127,27 +136,38 @@ export function ImportDialog({
   const aliases = entity === "contacts" ? CONTACT_ALIASES : COMPANY_ALIASES;
   const requiredKey = entity === "contacts" ? "first_name" : "name";
 
-  async function onFile(file: File) {
+  async function onFile(file: File | null) {
+    const version = ++selectionVersion.current;
     setError(null);
     setResult(null);
+    setRows([]);
+    setFileName("");
+    if (!file) return;
+    if (!/\.(xlsx|xls|csv)$/i.test(file.name)) {
+      setError("Bitte eine .xlsx-, .xls- oder .csv-Datei auswählen.");
+      return;
+    }
+    setReading(true);
     try {
       const buf = await file.arrayBuffer();
+      if (selectionVersion.current !== version) return;
       const parsed = parseWorkbook(buf, known, aliases);
       if (parsed.rows.length === 0) {
-        setError("Keine Datenzeilen gefunden (erste Zeile = Header erwartet).");
-        setRows([]);
+        setError("Keine Datenzeilen gefunden. Die erste Zeile muss Spaltennamen enthalten.");
         return;
       }
       setFileName(file.name);
       setRows(parsed.rows);
     } catch {
-      setError("Datei konnte nicht gelesen werden (.xlsx oder .csv erwartet).");
-      setRows([]);
+      if (selectionVersion.current === version) setError("Datei konnte nicht gelesen werden. Erwartet wird .xlsx, .xls oder .csv.");
+    } finally {
+      if (selectionVersion.current === version) setReading(false);
     }
   }
 
-  async function submit() {
-    if (rows.length === 0) return;
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy || reading || result || rows.length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -166,6 +186,8 @@ export function ImportDialog({
   }
 
   function close() {
+    if (busy || reading) return;
+    selectionVersion.current += 1;
     setOpen(false);
     setRows([]);
     setFileName("");
@@ -176,80 +198,58 @@ export function ImportDialog({
   const validCount = rows.filter((r) => String(r[requiredKey] ?? "").trim() !== "").length;
 
   return (
-    <>
-      <button type="button" className="btn" onClick={() => setOpen(true)}>
-        <Upload size={16} /> {buttonLabel}
-      </button>
-      {open && (
-        <div className="dialog-overlay" onClick={close}>
-          <div className="dialog" role="dialog" aria-modal="true" aria-label="Import" onClick={(e) => e.stopPropagation()}>
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2>{entity === "contacts" ? "Kontakte importieren" : "Firmen importieren"}</h2>
-              <button type="button" className="btn btn-sm" onClick={close} aria-label="Schließen">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="stack">
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="input"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void onFile(f);
-                }}
-                aria-label="Import-Datei (.xlsx oder .csv)"
-              />
-              {entity === "contacts" && (
-                <label className="row small" style={{ gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={inferCompany}
-                    onChange={(e) => setInferCompany(e.target.checked)}
-                  />
-                  Firma aus E-Mail-Domain ableiten (inferCompanyFromEmail)
-                </label>
-              )}
-              {fileName && (
-                <p className="small muted">
-                  {fileName}: {rows.length} Zeilen, davon {validCount} mit{" "}
-                  <code className="mono">{requiredKey}</code>.
-                </p>
-              )}
-              {error && (
-                <p className="form-error" role="alert">
-                  {error}
-                </p>
-              )}
-              {result && (
-                <div className="hint-box">
+    <Dialog open={open} onOpenChange={(nextOpen, details) => {
+      if (busy || reading) {
+        details.cancel();
+        return;
+      }
+      if (nextOpen) setOpen(true);
+      else close();
+    }} disablePointerDismissal={busy || reading}>
+      <DialogTrigger render={<Button variant="outline" type="button" />}>
+        <Upload data-icon="inline-start" />{buttonLabel}
+      </DialogTrigger>
+      <DialogContent showCloseButton={!busy && !reading} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{entity === "contacts" ? "Kontakte importieren" : "Firmen importieren"}</DialogTitle>
+          <DialogDescription>Eine Excel- oder CSV-Datei auswählen. Die erste Zeile enthält die Spaltennamen, danach folgen die Datensätze.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-w-0 flex-col gap-4" aria-busy={busy || reading}>
+          <FieldGroup>
+            <Field data-disabled={busy || reading || !!result}>
+              <FieldLabel htmlFor={`${id}-file`}>Import-Datei</FieldLabel>
+              <Input id={`${id}-file`} type="file" accept=".xlsx,.xls,.csv" disabled={busy || reading || !!result} onChange={(e) => void onFile(e.target.files?.[0] ?? null)} aria-describedby={`${id}-file-description`} />
+              <FieldDescription id={`${id}-file-description`}>Unterstützt werden .xlsx, .xls und .csv. Zusätzliche Spalten werden als Custom Fields übernommen.</FieldDescription>
+            </Field>
+            {entity === "contacts" && (
+              <Field orientation="horizontal" data-disabled={busy || !!result}>
+                <Checkbox id={`${id}-infer-company`} checked={inferCompany} onCheckedChange={setInferCompany} disabled={busy || !!result} />
+                <FieldLabel htmlFor={`${id}-infer-company`}>Firma aus E-Mail-Domain ableiten</FieldLabel>
+              </Field>
+            )}
+            {reading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner />Datei wird gelesen…</p>}
+            {fileName && <p className="break-words text-sm text-muted-foreground">{fileName}: {rows.length} Zeilen, davon {validCount} mit <code className="font-mono">{requiredKey}</code>.</p>}
+            {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+            {result && (
+              <Alert role="status">
+                <AlertTitle>Import abgeschlossen</AlertTitle>
+                <AlertDescription>
                   Importiert: {result.imported ?? 0} · Übersprungen: {result.skipped ?? 0}
                   {result.companiesCreated != null && <> · Firmen angelegt: {result.companiesCreated}</>}
                   {result.duplicates != null && <> · Duplikate: {result.duplicates}</>}
-                </div>
-              )}
-            </div>
-
-            <div className="dialog-actions">
-              <button type="button" className="btn" onClick={close}>
-                {result ? "Schließen" : "Abbrechen"}
-              </button>
-              {!result && (
-                <button
-                  type="button"
-                  className="btn btn-accent"
-                  onClick={submit}
-                  disabled={busy || rows.length === 0}
-                >
-                  {busy ? "Importiert…" : `${validCount} importieren`}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+                </AlertDescription>
+              </Alert>
+            )}
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={close} disabled={busy || reading}>{result ? "Schließen" : "Abbrechen"}</Button>
+            {!result && <Button type="submit" disabled={busy || reading || rows.length === 0}>
+              {busy && <Spinner data-icon="inline-start" />}
+              {busy ? "Importiert…" : `${validCount} importieren`}
+            </Button>}
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import { asList, type Company, type Contact } from "@/lib/types";
@@ -44,17 +45,18 @@ export default async function ContactsPage({
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Kontakte</h1>
-      </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-6 p-4 md:p-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Kontakte</h1>
+        <p className="text-sm text-muted-foreground">Kontaktdaten verwalten und Personen ihren Firmen zuordnen.</p>
+      </header>
       {error ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Kontakte konnten nicht geladen werden</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : (
-        <ContactsManager contacts={contacts} companies={companies} total={total} />
+        <ContactsManager key={q.toString()} contacts={contacts} companies={companies} total={total} />
       )}
     </div>
   );

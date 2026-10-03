@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import { asList, type Company } from "@/lib/types";
@@ -41,17 +42,18 @@ export default async function CompaniesPage({
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Firmen</h1>
-      </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-6 p-4 md:p-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Firmen</h1>
+        <p className="text-sm text-muted-foreground">Firmen, Branchen und Kontaktdaten an einem Ort verwalten.</p>
+      </header>
       {error ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Firmen konnten nicht geladen werden</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : (
-        <CompaniesManager companies={companies} total={total} />
+        <CompaniesManager key={q.toString()} companies={companies} total={total} />
       )}
     </div>
   );

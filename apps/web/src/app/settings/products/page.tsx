@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import { asList, type Product } from "@/lib/types";
@@ -29,15 +30,17 @@ export default async function ProductsPage() {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Produkte</h1>
-      </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <header className="flex flex-col gap-1">
+        <p className="text-sm text-muted-foreground">Einstellungen</p>
+        <h1 className="text-2xl font-semibold tracking-tight">Produkte</h1>
+        <p className="text-sm text-muted-foreground">Verwalte den Produktkatalog für deine Deals und Abos.</p>
+      </header>
       {error ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Produkte konnten nicht geladen werden</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : (
         <ProductsManager initialProducts={products} />
       )}

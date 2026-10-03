@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
 import { asList, type Company, type Contact, type Deal, type Product, type Stage } from "@/lib/types";
@@ -48,15 +49,16 @@ export default async function DealsPage({
   }
 
   return (
-    <div className="page" style={{ maxWidth: 1280 }}>
-      <div className="page-head">
-        <h1>Deals</h1>
-      </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Deals</h1>
+        <p className="text-sm text-muted-foreground">Verfolge deine Deals und verschiebe sie durch die Pipeline.</p>
+      </header>
       {error ? (
-        <div className="error-box">
-          <strong>Fehler beim Laden</strong>
-          <p>{error}</p>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Deals konnten nicht geladen werden</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : (
         <DealsBoard
           deals={deals}
