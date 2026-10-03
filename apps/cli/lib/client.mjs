@@ -1,110 +1,86 @@
-/**
- * Minimal HTTP client for the Vibe CRM API (NestJS, prefix /v1).
- * Zero dependencies — global fetch + AbortSignal.timeout (Node >= 22).
- */
+/** Zero-dependency HTTP client. No redirect, retry or credential forwarding. */
 import { getApiKey, resolveInstance } from "./config.mjs";
+import { ApiError, UsageError, redactSecrets } from "./errors.mjs";
+import { validateInstance, validateToken } from "./instance.mjs";
+export { ApiError, UsageError, validateInstance };
 
-export class UsageError extends Error {}
-
-/** API error with an HTTP status (0 = unreachable). */
-export class ApiError extends Error {
-  constructor(message, status, body) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-/** URL passed to the most recent connect() — used for honest connection errors. */
 let lastInstanceUrl = "";
-export function lastConnectedInstance() {
-  return lastInstanceUrl;
+export function lastConnectedInstance() { return lastInstanceUrl; }
+export function assertInstance(flag, context) {
+  const url = resolveInstance(flag, context);
+  if (!url) throw new UsageError("No instance configured. Use --instance <url>, --context <name>, CRM_INSTANCE, or context add/use --scope local|global.");
+  return validateInstance(url);
 }
-
-export function assertInstance(flag) {
-  const url = resolveInstance(flag);
-  if (!url) {
-    throw new UsageError(
-      "No instance configured. Set one with:\n" +
-        "  vibe-crm config set instance <url>   (persistent)\n" +
-        "  CRM_INSTANCE=<url> vibe-crm <cmd>      (per invocation)\n" +
-        "  vibe-crm <cmd> --instance <url>       (per invocation)"
-    );
-  }
-  return url;
-}
-
-/** Resolve the instance + stored key. Throws UsageError when missing. */
-export function connect(flag) {
-  const url = assertInstance(flag);
+export function connect(flag, context) {
+  const url = assertInstance(flag, context);
   lastInstanceUrl = url;
   const key = getApiKey(url);
-  if (!key) {
-    throw new UsageError(
-      `No API key stored for ${url}. Authenticate first:\n` +
-        `  vibe-crm auth login --instance ${url} --token <vc_…>   (key from web /settings/tokens)`
-    );
-  }
+  if (!key) throw new UsageError(`No API token stored for ${url}. Use auth login --instance <url> --token-stdin, with a token from web /settings/tokens.`);
   return { url, key };
 }
 
-/**
- * Raw request against the API.
- * @returns parsed JSON (or { ok:true } for empty bodies)
- * @throws ApiError with .status (0 when unreachable)
- */
 export async function request(instance, { method = "GET", path = "/", query, body, token, timeoutMs = 15_000 } = {}) {
-  const base = instance.replace(/\/+$/, "");
+  const base = validateInstance(instance).replace(/\/+$/, "");
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || /[\r\n#]/.test(path)) throw new UsageError("API path must be an absolute path on the selected instance.");
+  if (token !== undefined) validateToken(token);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2 ** 31 - 1) throw new UsageError("timeoutMs must be a positive safe timer interval.");
   let target = `${base}${path}`;
+  if (new URL(target).origin !== new URL(base).origin) throw new UsageError("API request must stay on the selected instance.");
   if (query) {
     const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(query)) {
-      if (v === undefined || v === null || v === "") continue;
-      qs.set(k, String(v));
+    for (const [name, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== "") qs.set(name, String(value));
     }
-    const s = qs.toString();
-    if (s) target += `?${s}`;
+    if (qs.size) target += `${target.includes("?") ? "&" : "?"}${qs}`;
   }
+  lastInstanceUrl = instance;
   let res;
+  let text;
+  const signal = AbortSignal.timeout(timeoutMs);
   try {
     res = await fetch(target, {
       method,
       headers: {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        ...(token !== undefined ? { Authorization: `Bearer ${token}` } : {})
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs)
+      redirect: "manual",
+      signal
     });
-  } catch (err) {
-    throw new ApiError(`Cannot reach ${base}: ${err instanceof Error ? err.message : String(err)}`, 0, null);
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel();
+      throw new ApiError("API redirect refused. Configure the final instance URL explicitly; no credentials were forwarded.", res.status, { error: "redirect_refused" });
+    }
+    text = await res.text();
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(`Cannot reach ${base}: ${signal.aborted ? "request timed out" : "connection or response failed"}`, 0, null);
   }
-  const text = await res.text();
   let data = null;
   if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text.slice(0, 500);
+    try { data = JSON.parse(text); } catch {
+      if (res.ok) throw new ApiError("API returned invalid JSON.", res.status, { error: "invalid_response" });
+      data = redactSecrets(text.slice(0, 500));
     }
   }
   if (!res.ok) {
-    const detail = data && typeof data === "object" && data.error ? data.error : typeof data === "string" ? data : `HTTP ${res.status}`;
-    const extra =
-      data && typeof data === "object" && data.valid_fields ? ` (valid: ${(data.valid_fields ?? []).join(", ")})` : "";
-    throw new ApiError(`${detail}${extra}`, res.status, data);
+    const detail = data && typeof data === "object" && typeof data.error === "string" ? data.error : typeof data === "string" ? data : `HTTP ${res.status}`;
+    const extra = Array.isArray(data?.valid_fields) ? ` (valid: ${data.valid_fields.join(", ")})` : "";
+    throw new ApiError(redactSecrets(`${detail}${extra}`), res.status, data);
   }
-  return data ?? { ok: true };
+  return text ? data : { ok: true };
 }
 
-/** Instance health without any auth (public endpoint). */
+/** Public readiness endpoint. A 200 HTML page or liveness-only object is not health. */
 export async function health(url) {
+  validateInstance(url);
   try {
     const data = await request(url, { path: "/health", timeoutMs: 10_000 });
+    if (data?.ok !== true || data?.db !== true) return { ok: false, status: 200, body: { error: "unhealthy" } };
     return { ok: true, status: 200, body: data };
-  } catch (err) {
-    if (err instanceof ApiError) return { ok: false, status: err.status, body: err.body ?? err.message };
-    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  } catch (error) {
+    if (error instanceof ApiError) return { ok: false, status: error.status, body: error.body ?? error.message };
+    throw error;
   }
 }

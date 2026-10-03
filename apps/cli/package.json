@@ -1,1 +1,15 @@
-{"bin": {"vibe-crm": "bin/vibe-crm.js"},"description": "Vibe CRM Agent-CLI (plain ESM, zero deps — läuft mit System-Node).","license": "UNLICENSED","name": "vibe-crm","private": true,"type": "module","version": "0.1.0"}
+{
+  "name": "vibe-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vibe CRM CLI, plain ESM with no runtime dependencies.",
+  "license": "UNLICENSED",
+  "bin": { "vibe-crm": "bin/vibe-crm.js" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "typecheck": "node scripts/check.mjs",
+    "build": "node scripts/check.mjs"
+  }
+}

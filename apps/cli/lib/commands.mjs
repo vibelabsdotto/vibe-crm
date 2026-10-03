@@ -99,15 +99,15 @@ export async function cmdHealth(args, ctx) {
     console.log(HEALTH_HELP);
     return;
   }
-  const instance = assertInstance(args.instance);
+  const instance = assertInstance(args.instance, args.context);
   const result = await health(instance);
+  if (!result.ok) process.exitCode = 1;
   if (ctx.json) {
     emit(ctx, "", { instance, ok: result.ok, status: result.status, body: result.body });
   } else if (result.ok) {
     console.log(`✓ ${instance} — API healthy`);
   } else {
-    console.error(`✗ ${instance} — unreachable (status ${result.status}): ${JSON.stringify(result.body)}`);
-    process.exitCode = 1;
+    console.error(`✗ ${instance} — unreachable or unhealthy (status ${result.status}).`);
   }
 }
 
@@ -123,7 +123,7 @@ export async function cmdContacts(args, ctx) {
     console.log(CONTACTS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, {
     path: "/v1/contacts",
     query: {
@@ -169,7 +169,7 @@ export async function cmdContactShow(args, ctx) {
     console.log(CONTACT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm contact show needs --id <id>");
   const data = await request(url, { path: `/v1/contacts/${encodeURIComponent(id)}`, token: key });
   const c = data?.contact ?? data;
@@ -192,7 +192,7 @@ export async function cmdContactAdd(args, ctx) {
     console.log(CONTACT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const firstName = need(args, "first-name", "vibe-crm contact add needs --first-name <v>");
   const body = { first_name: firstName };
   for (const [opt, api] of [
@@ -222,7 +222,7 @@ export async function cmdContactUpdate(args, ctx) {
     console.log(CONTACT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm contact update needs --id <id>");
   const body = {};
   for (const [opt, api] of [
@@ -251,7 +251,7 @@ export async function cmdContactRm(args, ctx) {
     console.log(CONTACT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm contact rm needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/contacts/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Removed contact ${id} (deals kept, contact_id=NULL)`, { instance: url, ok: true, id });
@@ -268,7 +268,7 @@ export async function cmdCompanies(args, ctx) {
     console.log(COMPANIES_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, {
     path: "/v1/companies",
     query: {
@@ -310,7 +310,7 @@ export async function cmdCompanyAdd(args, ctx) {
     console.log(COMPANY_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const name = need(args, "name", "vibe-crm company add needs --name <v>");
   const body = { name };
   for (const f of ["domain", "industry", "phone", "email", "notes"]) {
@@ -329,7 +329,7 @@ export async function cmdCompanyUpdate(args, ctx) {
     console.log(COMPANY_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm company update needs --id <id>");
   const body = {};
   for (const f of ["name", "domain", "industry", "phone", "email", "notes"]) {
@@ -349,7 +349,7 @@ export async function cmdCompanyRm(args, ctx) {
     console.log(COMPANY_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm company rm needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/companies/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Removed company ${id} (contacts kept, company_id=NULL)`, { instance: url, ok: true, id });
@@ -366,7 +366,7 @@ export async function cmdDeals(args, ctx) {
     console.log(DEALS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, {
     path: "/v1/deals",
     query: {
@@ -415,7 +415,7 @@ export async function cmdDealAdd(args, ctx) {
     console.log(DEAL_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const name = need(args, "name", "vibe-crm deal add needs --name <v>");
   const body = { name };
   const contactId = flag(args, "contact-id", "contactId", "contact");
@@ -448,7 +448,7 @@ export async function cmdDealUpdate(args, ctx) {
     console.log(DEAL_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm deal update needs --id <id>");
   const body = {};
   for (const [opt, api] of [["name", "name"], ["stage", "stage"], ["notes", "notes"]]) {
@@ -482,7 +482,7 @@ export async function cmdDealMove(args, ctx) {
     console.log(DEAL_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm deal move needs --id <id>");
   const stage = need(args, "stage", "vibe-crm deal move needs --stage <key>");
   const data = await request(url, {
@@ -500,7 +500,7 @@ export async function cmdDealRm(args, ctx) {
     console.log(DEAL_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm deal rm needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/deals/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Removed deal ${id}`, { instance: url, ok: true, id });
@@ -517,7 +517,7 @@ export async function cmdPipeline(args, ctx) {
     console.log(PIPELINE_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, { path: "/v1/deals/board", token: key });
   const deals = Array.isArray(data) ? data : (data?.deals ?? []);
   const stages = await request(url, { path: "/v1/stages", token: key }).catch(() => null);
@@ -553,7 +553,7 @@ export async function cmdStages(args, ctx) {
     console.log(STAGES_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, { path: "/v1/stages", token: key });
   const { rows } = asList(data, "stages");
   if (ctx.json) return emit(ctx, "", { instance: url, stages: rows });
@@ -587,7 +587,7 @@ export async function cmdActivityLog(args, ctx) {
     console.log(ACTIVITY_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const entityType = need(args, "entity", "vibe-crm activity log needs --entity contact|company|deal");
   if (!["contact", "company", "deal"].includes(entityType)) {
     throw new UsageError(`--entity must be one of: contact | company | deal (got "${entityType}")`);
@@ -624,7 +624,7 @@ export async function cmdActivityList(args, ctx) {
     console.log(ACTIVITY_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const entityType = need(args, "entity", "vibe-crm activity list needs --entity contact|company|deal");
   const entityId = need(args, "id", "vibe-crm activity list needs --id <entityId>");
   const data = await request(url, {
@@ -745,13 +745,12 @@ export async function cmdImport(args, ctx, kind) {
     if (records.length > 5) console.log(`  … +${records.length - 5} more`);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const path = kind === "contacts" ? "/v1/contacts/import" : "/v1/companies/import";
   const body = { [kind]: records };
   if (kind === "contacts") {
-    const infer = flag(args, "infer-company", "inferCompany");
+    const infer = args["infer-company"] ?? args.inferCompany;
     if (infer !== undefined) body.inferCompanyFromEmail = infer === true || infer === "true";
-    else if (args["infer-company"] === true) body.inferCompanyFromEmail = true;
   }
   const data = await request(url, { method: "POST", path, body, token: key });
   if (ctx.json) return emit(ctx, "", { instance: url, ...data });
@@ -780,7 +779,7 @@ export async function cmdTokensCreate(args, ctx) {
     console.log(TOKENS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const name = need(args, "name", "vibe-crm tokens create needs --name <label>");
   const data = await request(url, { method: "POST", path: "/v1/tokens", body: { name }, token: key });
   const t = data?.token ?? data;
@@ -798,7 +797,7 @@ export async function cmdTokensLs(args, ctx) {
     console.log(TOKENS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, { path: "/v1/tokens", token: key });
   const { rows } = asList(data, "tokens");
   if (ctx.json) return emit(ctx, "", { instance: url, tokens: rows });
@@ -822,7 +821,7 @@ export async function cmdTokensRevoke(args, ctx) {
     console.log(TOKENS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm tokens revoke needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/tokens/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Revoked token ${id}`, { instance: url, ok: true, id });
@@ -839,7 +838,7 @@ export async function cmdProducts(args, ctx) {
     console.log(PRODUCTS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, {
     path: "/v1/products",
     query: { search: flag(args, "search") },
@@ -874,7 +873,7 @@ export async function cmdProductAdd(args, ctx) {
     console.log(PRODUCT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const name = need(args, "name", "vibe-crm product add needs --name <v>");
   const body = { name };
   for (const f of ["key", "type", "status", "notes"]) {
@@ -891,7 +890,7 @@ export async function cmdProductRm(args, ctx) {
     console.log(PRODUCT_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const slug = need(args, "key", "vibe-crm product rm needs --key <slug>");
   await request(url, { method: "DELETE", path: `/v1/products/${encodeURIComponent(slug)}`, token: key });
   emit(ctx, `✓ Removed product ${slug}`, { instance: url, ok: true, key: slug });
@@ -909,7 +908,7 @@ export async function cmdSubscriptions(args, ctx) {
     console.log(SUBSCRIPTIONS_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, {
     path: "/v1/subscriptions",
     query: {
@@ -968,7 +967,7 @@ export async function cmdSubscriptionAdd(args, ctx) {
     console.log(SUBSCRIPTION_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const name = need(args, "name", "vibe-crm subscription add needs --name <v>");
   const body = { name };
   const companyId = flag(args, "company-id", "companyId", "company");
@@ -1003,7 +1002,7 @@ export async function cmdSubscriptionUpdate(args, ctx) {
     console.log(SUBSCRIPTION_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm subscription update needs --id <id>");
   const body = {};
   for (const [opt, api] of [
@@ -1045,7 +1044,7 @@ export async function cmdSubscriptionCancel(args, ctx) {
     console.log(SUBSCRIPTION_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm subscription cancel needs --id <id>");
   const data = await request(url, {
     method: "PUT",
@@ -1062,7 +1061,7 @@ export async function cmdSubscriptionRm(args, ctx) {
     console.log(SUBSCRIPTION_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const id = need(args, "id", "vibe-crm subscription rm needs --id <id>");
   await request(url, { method: "DELETE", path: `/v1/subscriptions/${encodeURIComponent(id)}`, token: key });
   emit(ctx, `✓ Removed subscription ${id}`, { instance: url, ok: true, id });
@@ -1077,7 +1076,7 @@ export async function cmdMrr(args, ctx) {
     console.log(MRR_HELP);
     return;
   }
-  const { url, key } = connect(args.instance);
+  const { url, key } = connect(args.instance, args.context);
   const data = await request(url, { path: "/v1/subscriptions/summary", token: key });
   if (ctx.json) return emit(ctx, "", { instance: url, ...data });
   const byProduct = Array.isArray(data?.byProduct) ? data.byProduct : [];
@@ -1176,7 +1175,7 @@ export async function cmdImportNotion(args, ctx) {
   let key = null;
   let online = false;
   try {
-    ({ url, key } = connect(args.instance));
+    ({ url, key } = connect(args.instance, args.context));
     online = true;
   } catch (err) {
     if (!dryRun) throw err;

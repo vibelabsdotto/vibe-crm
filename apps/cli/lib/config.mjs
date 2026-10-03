@@ -1,143 +1,185 @@
-/**
- * Vibe CRM CLI configuration.
- *
- * Instance resolution precedence (first set wins):
- *   1. --instance <url>              (flag, per invocation)
- *   2. CRM_INSTANCE=<url>            (environment)
- *   3. ./.crm/crm.json               (repo-local, gitignored)
- *   4. ~/.config/vibe-crm/config.json (user-global)
- *
- * Per-instance API keys (vc_… tokens from the web /settings/tokens page) live in:
- *   ./.crm/instances.json (repo-local, gitignored) or ~/.config/vibe-crm/instances.json
- * Never in env, never printed unredacted, never committed.
- */
-import fs from "node:fs";
+/** Named contexts contain URLs only. Tokens remain in compatible per-host stores. */
 import os from "node:os";
 import path from "node:path";
+import { inspectPath, readJson, writeJsonAtomic } from "./files.mjs";
+import { UsageError } from "./errors.mjs";
+import { validateInstance, validateToken } from "./instance.mjs";
 
-function homeDir() {
-  return path.join(os.homedir(), ".config", "vibe-crm");
+const SCOPES = ["local", "global"];
+function validateScope(scope) {
+  if (!SCOPES.includes(scope)) throw new UsageError("--scope local|global is required for context changes.");
+  return scope;
 }
-
-function localDir() {
-  return path.join(process.cwd(), ".crm");
+function directory(scope) {
+  validateScope(scope);
+  return scope === "local" ? path.join(process.cwd(), ".crm") : path.join(os.homedir(), ".config", "vibe-crm");
 }
-
-/** Prefer the repo-local dir (when it exists), fall back to ~/.config. */
-function configFile() {
-  const local = path.join(localDir(), "crm.json");
-  if (fs.existsSync(localDir()) || fs.existsSync(local)) return local;
-  return path.join(homeDir(), "config.json");
+function scopedFile(scope, kind = "config") {
+  const name = kind === "config" ? (scope === "local" ? "crm.json" : "config.json") : `${kind}.json`;
+  return path.join(directory(scope), name);
 }
-
-function instancesFile() {
-  const local = path.join(localDir(), "instances.json");
-  if (fs.existsSync(localDir()) || fs.existsSync(local)) return local;
-  return path.join(homeDir(), "instances.json");
+function defaultScope() {
+  const local = directory("local");
+  const info = inspectPath(local);
+  if (info && !info.isDirectory()) throw new UsageError(`Configuration directory must be a regular directory: ${local}`);
+  return info ? "local" : "global";
 }
+function selectedScope(scope) { return scope === undefined ? defaultScope() : validateScope(scope); }
 
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return null;
+export function configFilePath(scope) { return scopedFile(selectedScope(scope)); }
+export function instancesFilePath(scope) { return scopedFile(selectedScope(scope), "instances"); }
+export function loadConfig(scope) { return readJson(configFilePath(scope)) ?? {}; }
+export function saveConfig(config, scope) {
+  const file = configFilePath(scope);
+  readJson(file);
+  validateConfigFields(config, file);
+  writeJsonAtomic(file, config);
+}
+function validateConfigFields(config, file) {
+  if (Object.hasOwn(config, "instance")) validateInstance(config.instance);
+  if (Object.hasOwn(config, "context")) contextName(config.context);
+  if (Object.hasOwn(config, "instance") && Object.hasOwn(config, "context")) {
+    throw new UsageError(`Configuration contains both instance and context. Resolve with config set or context use: ${file}`);
   }
 }
 
-function writeJsonAtomic(file, data) {
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-  try {
-    fs.chmodSync(dir, 0o700);
-    fs.chmodSync(file, 0o600);
-  } catch {
-    /* best effort on odd filesystems */
-  }
-}
-
-export function loadConfig() {
-  return readJson(configFile()) ?? {};
-}
-
-export function configFilePath() {
-  return configFile();
-}
-
-export function saveConfig(config) {
-  writeJsonAtomic(configFile(), config);
-}
-
-export function listInstances() {
-  return readJson(instancesFile()) ?? {};
-}
-
-export function instancesFilePath() {
-  return instancesFile();
-}
-
-export function instanceKey(url) {
-  try {
-    return new URL(url).host;
-  } catch {
-    return String(url).replace(/[^a-z0-9.-]/gi, "_");
-  }
-}
-
-function readStore(file) {
-  return readJson(file);
-}
-
-export function getApiKey(url) {
-  const key = instanceKey(url);
-  for (const file of [path.join(localDir(), "instances.json"), path.join(homeDir(), "instances.json")]) {
-    const store = readStore(file);
-    if (store?.[key]?.apiKey) return store[key].apiKey;
-  }
-  return null;
-}
-
-export function getInstanceEntry(url) {
-  const key = instanceKey(url);
-  for (const file of [path.join(localDir(), "instances.json"), path.join(homeDir(), "instances.json")]) {
-    const store = readStore(file);
-    if (store?.[key]) return store[key];
-  }
-  return null;
-}
-
-export function saveApiKey(url, apiKey, meta) {
-  const file = instancesFile();
+export function instanceKey(url) { return new URL(validateInstance(url)).host; }
+function tokenStore(scope) {
+  const file = scopedFile(scope, "instances");
   const store = readJson(file) ?? {};
-  const key = instanceKey(url);
-  store[key] = {
-    apiKey,
-    email: meta?.email,
-    savedAt: new Date().toISOString()
-  };
-  writeJsonAtomic(file, store);
+  for (const [host, entry] of Object.entries(store)) {
+    if (!host || !entry || typeof entry !== "object" || Array.isArray(entry) || !Object.hasOwn(entry, "apiKey")) throw new UsageError(`Invalid per-host token store. File will not be overwritten: ${file}`);
+    try { validateToken(entry.apiKey); } catch { throw new UsageError(`Invalid token format in stored configuration. File will not be overwritten: ${file}`); }
+    for (const name of ["email", "savedAt"]) if (entry[name] !== undefined && typeof entry[name] !== "string") throw new UsageError(`Invalid token metadata. File will not be overwritten: ${file}`);
+  }
+  return store;
 }
-
-export function deleteApiKey(url) {
-  const file = instancesFile();
-  const store = readJson(file);
-  if (!store?.[instanceKey(url)]) return false;
-  delete store[instanceKey(url)];
-  writeJsonAtomic(file, store);
-  return true;
+export function validateTokenStorage(scope) { tokenStore(selectedScope(scope)); }
+export function listInstances() {
+  return { ...tokenStore("global"), ...tokenStore("local") };
 }
-
-export function resolveInstance(flag) {
-  if (flag) return flag;
-  if (process.env.CRM_INSTANCE) return process.env.CRM_INSTANCE;
-  const local = readJson(path.join(localDir(), "crm.json"));
-  if (local?.instance) return local.instance;
-  const home = readJson(path.join(homeDir(), "config.json"));
-  if (home?.instance) return home.instance;
+function tokenMatch(url) {
+  const host = instanceKey(url);
+  for (const scope of SCOPES) {
+    const store = tokenStore(scope);
+    if (Object.hasOwn(store, host)) return { entry: store[host], scope, host, file: scopedFile(scope, "instances") };
+  }
   return null;
 }
-
-export function redact(token) {
-  if (!token || token.length <= 10) return "****";
-  return `${token.slice(0, 6)}…${token.slice(-4)} (${token.length} chars)`;
+export function getApiKey(url) { return tokenMatch(url)?.entry.apiKey ?? null; }
+export function getInstanceEntry(url) { return tokenMatch(url)?.entry ?? null; }
+export function tokenProvenance(url) {
+  if (!url) return { state: "missing", source: "none" };
+  const match = tokenMatch(url);
+  return match ? { state: "stored", source: match.scope, file: match.file, host: match.host } : { state: "missing", source: "none", host: instanceKey(url) };
 }
+export function saveApiKey(url, apiKey, meta, scope) {
+  validateToken(apiKey);
+  if (meta?.email !== undefined && typeof meta.email !== "string") throw new UsageError("Token email metadata must be a string.");
+  const target = selectedScope(scope);
+  const store = tokenStore(target);
+  Object.defineProperty(store, instanceKey(url), { value: { apiKey, ...(meta?.email !== undefined ? { email: meta.email } : {}), savedAt: new Date().toISOString() }, enumerable: true, configurable: true, writable: true });
+  writeJsonAtomic(scopedFile(target, "instances"), store);
+}
+export function deleteApiKey(url) {
+  const host = instanceKey(url);
+  // Read and validate both stores before any mutation. Shadowed keys must not return.
+  const stores = SCOPES.map((scope) => ({ scope, store: tokenStore(scope) }));
+  let removed = false;
+  for (const { scope, store } of stores) {
+    if (!Object.hasOwn(store, host)) continue;
+    delete store[host];
+    writeJsonAtomic(scopedFile(scope, "instances"), store);
+    removed = true;
+  }
+  return removed;
+}
+
+function contextName(name) {
+  if (typeof name !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(name)) throw new UsageError("Context name must contain 1 to 64 letters, digits, _ or -, starting with a letter or digit.");
+  return name;
+}
+function contextStore(scope) {
+  const file = scopedFile(scope, "contexts");
+  const store = readJson(file) ?? {};
+  for (const [name, entry] of Object.entries(store)) {
+    contextName(name);
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || Object.keys(entry).length !== 1 || !Object.hasOwn(entry, "instance")) throw new UsageError(`Contexts may contain only an instance URL, never credentials: ${file}`);
+    validateInstance(entry.instance);
+  }
+  return store;
+}
+export function listContexts(scope) {
+  const scopes = scope === undefined ? SCOPES : [validateScope(scope)];
+  return scopes.flatMap((item) => {
+    const store = contextStore(item);
+    const config = readJson(scopedFile(item)) ?? {};
+    return Object.entries(store).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, entry]) => ({ name, instance: entry.instance, scope: item, file: scopedFile(item, "contexts"), active: config.context === name }));
+  });
+}
+export function getContext(name, scope) {
+  contextName(name);
+  for (const item of scope === undefined ? SCOPES : [validateScope(scope)]) {
+    const store = contextStore(item);
+    if (Object.hasOwn(store, name)) return { name, instance: store[name].instance, scope: item, file: scopedFile(item, "contexts") };
+  }
+  throw new UsageError(`Context not found${scope ? ` in ${scope}` : ""}: ${name}`);
+}
+export function changeContext(action, name, scope, url) {
+  if (!["add", "use", "remove", "rm"].includes(action)) throw new UsageError("Context action must be add, use or remove.");
+  contextName(name);
+  validateScope(scope);
+  const file = scopedFile(scope, "contexts");
+  const store = contextStore(scope);
+  if (action === "add") {
+    const instance = validateInstance(url);
+    if (Object.hasOwn(store, name)) throw new UsageError("Context already exists. Remove it explicitly or choose another name.");
+    Object.defineProperty(store, name, { value: { instance }, enumerable: true, configurable: true, writable: true });
+    writeJsonAtomic(file, store);
+  } else {
+    if (!Object.hasOwn(store, name)) throw new UsageError(`Context not found in ${scope}: ${name}`);
+    const configPath = scopedFile(scope);
+    const config = readJson(configPath) ?? {};
+    if (action === "use") {
+      delete config.instance;
+      config.context = name;
+      writeJsonAtomic(configPath, config);
+    } else {
+      if (config.context === name) {
+        delete config.context;
+        // A stale legacy instance must not revive after removing the active context.
+        delete config.instance;
+        writeJsonAtomic(configPath, config);
+      }
+      delete store[name];
+      writeJsonAtomic(file, store);
+    }
+  }
+  return { ok: true, action: action === "rm" ? "remove" : action, name, scope };
+}
+export function resolveSelection(flag, context) {
+  if (flag !== undefined && context !== undefined) throw new UsageError("--instance and --context are mutually exclusive.");
+  if (context !== undefined) {
+    const selected = getContext(context);
+    return { instance: selected.instance, source: "context-flag", context, scope: selected.scope, file: selected.file };
+  }
+  if (flag !== undefined) return { instance: validateInstance(flag), source: "flag" };
+  if (process.env.CRM_INSTANCE !== undefined) return { instance: validateInstance(process.env.CRM_INSTANCE), source: "environment" };
+  for (const scope of SCOPES) {
+    const file = scopedFile(scope);
+    const config = readJson(file);
+    if (!config) continue;
+    validateConfigFields(config, file);
+    if (Object.hasOwn(config, "instance")) return { instance: config.instance, source: scope, file };
+    if (Object.hasOwn(config, "context")) {
+      // Active selections are scope-bound, not subject to name shadowing.
+      const selected = getContext(config.context, scope);
+      return { instance: selected.instance, source: `${scope}-context`, context: config.context, scope, file, contextFile: selected.file };
+    }
+  }
+  return { instance: null, source: "none" };
+}
+export function resolveInstance(flag, context) { return resolveSelection(flag, context).instance; }
+
+/** Do not print even fragments of persisted credentials. */
+export function redact(token) { return token ? "[stored]" : "[missing]"; }
