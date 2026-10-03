@@ -4,6 +4,8 @@
 
 FROM node:22-alpine AS deps
 WORKDIR /app
+# Native npm peers need a source-build fallback when prebuild downloads fail.
+RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 # weitere Workspace-Manifeste, damit npm ci den Lockfile konsistent auflöst
