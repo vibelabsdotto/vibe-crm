@@ -15,6 +15,8 @@ import { ContactsService } from './contacts/contacts.service';
 import { CustomFieldsModule } from './custom-fields/custom-fields.module';
 import { DatabaseModule } from './database/database.module';
 import { DatabaseService } from './database/database.service';
+import { DealViewController } from './deals/deal-view.controller';
+import { DealViewService } from './deals/deal-view.service';
 import { DealsController } from './deals/deals.controller';
 import { DealsService } from './deals/deals.service';
 import { HealthController } from './health.controller';
@@ -42,6 +44,7 @@ import { TokensController } from './tokens/tokens.controller';
     LocalAccountController,
     StatsController,
     ContactsController,
+    DealViewController,
     DealsController,
     ActivitiesController,
     ImportController,
@@ -50,6 +53,7 @@ import { TokensController } from './tokens/tokens.controller';
   providers: [
     AuthService,
     ContactsService,
+    DealViewService,
     DealsService,
     ActivitiesService,
     ImportService,

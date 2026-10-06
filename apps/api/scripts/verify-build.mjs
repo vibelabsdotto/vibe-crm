@@ -13,6 +13,8 @@ const requiredArtifacts = [
   'dist/src/companies/workspace-company.controller.js',
   'dist/src/contacts/contacts.controller.js',
   'dist/src/deals/deals.controller.js',
+  'dist/src/deals/deal-view.controller.js',
+  'dist/src/deals/deal-view.service.js',
   'dist/src/stages/stages.controller.js',
   'dist/src/activities/activities.controller.js',
   'dist/src/custom-fields/custom-fields.controller.js',

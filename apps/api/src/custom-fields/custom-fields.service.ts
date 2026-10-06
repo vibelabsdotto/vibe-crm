@@ -115,6 +115,20 @@ const BUILTIN_COLUMNS: Record<EntityType, ReadonlySet<string>> = {
 
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
 
+// Reserve real relation columns and computed Deal response/view keys on new
+// definitions only. Existing custom definitions and their writers stay intact.
+const RESERVED_DEAL_KEYS = new Set([
+  'company_id',
+  'product_id',
+  'effective_company_id',
+  'company_name',
+  'company_domain',
+  'contact_name',
+  'contact_first_name',
+  'contact_last_name',
+  'product_name',
+]);
+
 function parseOptions(raw: string): Record<string, unknown> {
   try {
     const v: unknown = JSON.parse(raw || '{}');
@@ -423,6 +437,11 @@ export function assertValidKey(entity: EntityType, key: string): void {
     throw new BadRequestException(
       `"${key}" is a built-in ${entity} field and can't be used as a custom property.`,
     );
+  }
+  if (entity === 'deal' && RESERVED_DEAL_KEYS.has(key)) {
+    throw new BadRequestException({
+      error: `"${key}" ist ein reserviertes Deal-Feld und kann nicht als benutzerdefiniertes Feld angelegt werden.`,
+    });
   }
 }
 

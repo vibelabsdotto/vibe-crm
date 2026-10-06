@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   real,
@@ -91,6 +93,18 @@ export const deals = sqliteTable(
     index('idx_deals_product').on(table.productId),
     index('idx_deals_stage').on(table.stage),
   ],
+);
+
+// One shared Deal-list configuration. Reads resolve stale registry/stage keys
+// without rewriting either this row or any entity values.
+export const dealListView = sqliteTable(
+  'deal_list_view',
+  {
+    id: integer('id').primaryKey(),
+    columns: text('columns').notNull(),
+    visibility: text('visibility').notNull().default('{}'),
+  },
+  (table) => [check('deal_list_view_singleton', sql`${table.id} = 1`)],
 );
 
 // Recurring contracts (retainers/abos) — the leading retainer system
@@ -203,6 +217,7 @@ export const schema = {
   contacts,
   products,
   deals,
+  dealListView,
   subscriptions,
   stages,
   activities,
@@ -224,6 +239,7 @@ export type WorkspaceSettingRow = typeof workspaceSettings.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type ProductRow = typeof products.$inferSelect;
 export type DealRow = typeof deals.$inferSelect;
+export type DealListViewRow = typeof dealListView.$inferSelect;
 export type SubscriptionRow = typeof subscriptions.$inferSelect;
 export type StageRow = typeof stages.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
