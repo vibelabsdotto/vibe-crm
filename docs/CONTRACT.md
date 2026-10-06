@@ -17,6 +17,7 @@ Port von OpenCRM v4 (`/tmp/opencrm-audit`, Hono + D1) auf den VibeLabs-Stack.
 - **Product**: Produkt/Leistung (`key`-Slug, z.B. `daze`), aus Notion-Projects geseedet. Deals und Subscriptions hängen optional dran.
 - **Subscription**: Laufender Vertrag (Retainer/Abo): Firma + Produkt + Betrag + Intervall + Zeitraum + Status. Antwort auf wiederkehrende Kundenzahlungen — Notion-Cashflow kennt nur Einzelbuchungen (`Recurring` überall false), das CRM wird das führende Retainer-System.
 - **MRR**: Monthly Recurring Revenue = Summe über `active|trial`-Subscriptions: monthly=amount, quarterly=amount/3, yearly=amount/12, one_time=0.
+- MRR wird je Währung getrennt berechnet. Es gibt keine implizite Wechselkursumrechnung. Die Legacy-Felder `mrr` und `byProduct` enthalten ausschließlich EUR; `byCurrency` enthält die separaten Währungsbeträge.
 - **Tenant-Modell v1: Single-Workspace.** Jede authentifizierte Identität (Session ODER Token) hat volles CRUD auf alle Daten. Kein Row-Ownership, kein Sharing.
 
 ## 2. Storage — SQLite (drizzle + better-sqlite3, Datei `/data/vibe-crm.sqlite` in Prod, `./data/vibe-crm.sqlite` lokal)
@@ -62,6 +63,7 @@ Seed aus Notion-Projects. DELETE → 409 `{ error: 'conflict' }` solange Deals/S
 `id` PK (UUID), `company_id` TEXT NULL → `companies(id) ON DELETE SET NULL`,
 `contact_id` TEXT NULL → `contacts(id) ON DELETE SET NULL`,
 `product_id` TEXT NULL → `products(key) ON DELETE SET NULL`,
+`deal_id` TEXT NULL UNIQUE → `deals(id) ON DELETE SET NULL` (ausdrückliche Deal-Vertragszuordnung, nie anhand gleicher Namen),
 `name` TEXT NOT NULL (z.B. `DAZE Monatspauschale`),
 `amount` REAL NOT NULL DEFAULT `0`, `currency` TEXT NOT NULL DEFAULT `'EUR'`,
 `interval` TEXT NOT NULL DEFAULT `'monthly'` (`monthly|quarterly|yearly|one_time`, sonst 400),
@@ -69,6 +71,10 @@ Seed aus Notion-Projects. DELETE → 409 `{ error: 'conflict' }` solange Deals/S
 `status` TEXT NOT NULL DEFAULT `'active'` (`active|trial|paused|cancelled|expired`, sonst 400),
 `notes` TEXT DEFAULT `''`, `created_at`/`updated_at` ISO-8601.
 Indizes `(company_id)`, `(status)`.
+
+### Eigenes Unternehmen
+
+Eine persistierte Workspace-Einstellung verweist per Firmen-ID auf genau einen bestehenden Firmen-Datensatz. Eine Zuordnung erzeugt keine Firma und ändert keine Kontakt-, Deal- oder Abo-Beziehungen. Es gibt keine automatische Namenssuche oder Zuordnung beim Start. Firmenlisten und Einzelantworten kennzeichnen den verknüpften Datensatz mit `is_own_company`.
 
 ### Tabelle `stages`
 
@@ -130,6 +136,7 @@ List-Query: `?page&limit(≤100)&sort&order&search&filters` (`filters` = JSON `[
 | --- | --- | --- |
 | GET | `/v1/stats` | `{ contacts, companies, deals, dealValue }` (dealValue = SUM exkl. is_lost) |
 | GET | `/v1/companies` | `?industry=`; Search name/domain/email; +`contact_count`; → `{ companies, total, page, limit }` |
+| GET | `/v1/companies/:id` | → `{ company }`, inklusive Custom Fields und `is_own_company`; 404 |
 | POST | `/v1/companies` | `{name!, domain?, industry?, phone?, email?, notes?, custom?}` → 201 |
 | PUT | `/v1/companies/:id` | partiell → 200; 404 |
 | DELETE | `/v1/companies/:id` | → `{ ok: true }`; Kontakte bleiben (`company_id=NULL`) |
@@ -138,16 +145,19 @@ List-Query: `?page&limit(≤100)&sort&order&search&filters` (`filters` = JSON `[
 | PUT | `/v1/contacts/:id` | partiell → 200 |
 | DELETE | `/v1/contacts/:id` | → `{ ok: true }`; Deals bleiben (`contact_id=NULL`) |
 | GET | `/v1/contacts/:id` | einzelner Kontakt + Company-Extras; 404 |
-| GET | `/v1/deals` | `?stage=&product=`; Search name/notes; +`total_value`; Kontakt/Company-Extras (+`product_id`, `company_id`) |
+| GET | `/v1/deals` | `?stage=&product=&company_id=`; Search name/notes; +`total_value`; Kontakt/Company-Extras (+`product_id`, `company_id`) |
+| GET | `/v1/deals/:id` | → `{ deal }`, inklusive Custom Fields und Beziehungs-Extras; 404 |
 | POST | `/v1/deals` | `{name!, contact_id?, company_id?, product_id? (muss existieren, sonst 400), value?, stage? (default erste Stage), close_date?, notes?, custom?}` → 201 |
 | PUT | `/v1/deals/:id` | partiell (inkl. `company_id`, `product_id`); Stage-Wechsel → `stage_change`-Activity (`won`/`lost`-Text); → 200 |
 | DELETE | `/v1/deals/:id` | → `{ ok: true }` |
 | GET | `/v1/deals/board` | alle Deals `ORDER BY created_at ASC` → `{ deals }` (Gruppierung clientseitig) |
 | GET/POST | `/v1/products` | Liste (name-asc) / `{key? (default Slug aus name; Format `[a-z][a-z0-9_-]*`), name!, type?, status?, notes?}` → 201 (409 Key-Dup) |
 | PUT/DELETE | `/v1/products/:key` | `name/type/status/notes` / DELETE → `{ ok: true }`, 409 solange Deals/Subscriptions referenzieren |
-| GET/POST | `/v1/subscriptions` | `?status=&company_id=&product=` → `{ subscriptions, total, page, limit }` (+Company-/Produkt-Extras) / `{company_id?, contact_id?, product_id? (muss existieren, sonst 400), name!, amount?, currency?, interval?, start_date?, end_date?, status?, notes?}` → 201 |
+| GET/POST | `/v1/subscriptions` | `?status=&company_id=&product=&deal_id=` → `{ subscriptions, total, page, limit }` (+Company-/Produkt-Extras) / `{company_id?, contact_id?, product_id? (muss existieren, sonst 400), deal_id?, name!, amount?, currency?, interval?, start_date?, end_date?, status?, notes?}` → 201 |
+| GET | `/v1/subscriptions/:id` | → `{ subscription }`; 404 |
 | PUT/DELETE | `/v1/subscriptions/:id` | partiell → 200; DELETE → `{ ok: true }` |
-| GET | `/v1/subscriptions/summary` | `{ mrr, active, trial, paused, total, byProduct: [{ product, productName, mrr, active }] }` (MRR-Regel §1) |
+| GET | `/v1/subscriptions/summary` | `{ mrr, active, trial, paused, total, byProduct: [{ product, productName, mrr, active }], byCurrency: [{ currency, mrr, active }] }` (MRR-Regel §1; Legacy-Beträge EUR-only) |
+| GET/PUT | `/v1/workspace/company` | → `{ company_id, company }`; PUT `{ company_id: string | null }` setzt oder löst die Zuordnung zu einer bestehenden Firma, ohne Firmenanlage |
 | GET/POST | `/v1/stages` | Liste (position-asc) / `{label!, key?, color?, position?, is_won?, is_lost?}` → 201 (409 Key-Dup) |
 | PUT/DELETE | `/v1/stages/:key` | alles außer `key` / `?reassign_to=` Pflicht bei belegten Stages (409 sonst); letzte Stage nicht löschbar |
 | GET/POST | `/v1/custom-fields` | `?entity=` → `{ defs }` / `{entity_type!, key!, label!, field_type?, options?, position?}` → 201 |
@@ -160,12 +170,18 @@ List-Query: `?page&limit(≤100)&sort&order&search&filters` (`filters` = JSON `[
 Custom-Write: flache Keys ODER `custom:{}`-Bag (Bag gewinnt); unbekannte Keys → 422; `options.required` → 400 auf Create (Update: nur explizites Leeren); Import-Coercion lenient (bad cell→null), required beim Import NICHT enforced.
 Stage-Löschen mit Deals ohne `reassign_to` → 409. `DELETE company/contact` kaskadiert nie (FK SET NULL).
 
+Deal-Kontakte müssen zur gewählten Firma passen. Ein Firmenwechsel mit einem fachlich widersprüchlichen Kontakt wird abgewiesen statt still gespeichert. Vertragsanlage aus einem Deal erfolgt nur durch eine ausdrückliche Benutzeraktion. Wiederholung derselben `deal_id` erzeugt keinen zweiten Vertrag; widersprüchliche Angaben überschreiben den bestehenden Vertrag nicht. Ein Stage-Wechsel auf gewonnen erzeugt niemals ein Abo. Beträge müssen endlich und nicht negativ sein; Intervalle, Währung und Datumsangaben werden validiert.
+
+Deal-Antworten liefern zusätzlich `effective_company_id`: direkte Firmen-ID, sonst die Firma des Kontakts. Der `company_id`-Listenfilter verwendet diese wirksame Zuordnung. Die gespeicherte direkte `company_id` wird dadurch nicht umgeschrieben. Einzelantworten und Schreibantworten behalten die bestehenden Entity-Envelopes `{ company }`, `{ contact }`, `{ deal }` beziehungsweise `{ subscription }`.
+
 ## 5. Web (Next.js 16.3, App Router, Port 3000)
 
-- Routes: `/` (Dashboard: Stats + Pipeline-Summary + MRR), `/contacts`, `/contacts/:id` (Detail + Timeline), `/companies`, `/deals` (Board + Tabelle, `?product=`-Filter), `/subscriptions` (Summary-Cards + Tabelle), `/settings/properties` (Custom Fields), `/settings/products` (Produkt-CRUD), `/settings/tokens` (API-Keys), `/sign-in`, `/sign-up`.
+- Routes: `/` (Dashboard: Stats + Pipeline-Summary + MRR je Währung), `/contacts`, `/contacts/:id` (bestehender Deep-Link), `/companies`, `/deals` (vertikale Stage-Liste mit `?product=`-/Stage-Filtern), `/subscriptions` (Summary-Cards + Tabelle), `/settings/company` (Eigenes Unternehmen / Stammdaten), `/settings/properties` (Custom Fields), `/settings/products` (Produkt-CRUD), `/settings/tokens` (API-Keys), `/sign-in`, `/sign-up`.
 - Sidebar: + Item „Abos" (`Repeat`-Icon, Badge aktive Subscriptions).
 - Shell: Sidebar (`collapsible="icon"`) ohne Topbar. Einstellungen als scrollbares Footer-Menü mit eigenen Einträgen für Produkte, Custom Fields und API-Tokens direkt über dem Benutzerbereich; Theme-Wechsel als Icon daneben. Mobile Bottom-Nav (`md:hidden`) öffnet die Sidebar über „Mehr“, Navigation schließt das Sheet. Sidebar-Badges: offene Deals (Anzahl nicht-gewonnen/verloren) und aktive Abos.
-- Tabellen (Contacts/Companies): Sekundärspalten `hidden sm/md/lg:table-cell` + Card-Grid-Fallback + `overflow-x-auto`. Deals-Board: Spalten stapeln auf Mobile, dnd-kit optional (Select-Wechsel genügt v1).
+- Tabellen (Contacts/Companies): Sekundärspalten `hidden sm/md/lg:table-cell` + Card-Grid-Fallback + `overflow-x-auto`. Primärer Detailaufruf für Firma/Kontakt/Deal/Vertrag ist ein seitlicher Base-UI-Drawer; die Übersicht bleibt gemountet. Ungespeicherte Eingaben verlangen eine Verwerfentscheidung, laufende Speicherung sperrt Schließen. Verlinkte Datensätze haben nachvollziehbare Rücknavigation und Fokus-Rückkehr.
+- Firmen-Drawer zeigt sämtliche Ansprechpartner, Deals und Verträge per exakter `company_id` ohne versteckte Seitenbegrenzung. Neuanlagen aus diesem Kontext übernehmen die Firmen-ID. Sammelkontakte werden nicht automatisch geteilt.
+- Deal-Pipeline: Stage-Gruppen untereinander in konfigurierter Reihenfolge, ein-/ausklappbar, kompakte Zeilen, Drag-and-drop einschließlich leerer Gruppen und eine bedienbare Select-Alternative. Keine zweite Deal-Übersicht darunter. Fehlgeschlagene Wechsel behalten die ursprüngliche Zuordnung und zeigen einen Fehler.
 - Theme: Tailwind v4, Dark-Mode via Klasse + `@custom-variant dark`, neutrale semantische Tokens aus der OpenFibu-Produkt-App. shadcn `base-nova` auf Base UI, Geist Sans + Geist Mono. Screens verwenden gemeinsame Komponenten statt Legacy-Klassen wie `btn`, `input` oder `card`.
 - API-Client: `apiFetch` (Bearer + Cookie-Passthrough serverseitig), `NEXT_PUBLIC_API_URL` (Build-Arg), `NEXT_PUBLIC_WEB_URL`.
 - Kein `?agent=true`-Modus. Keine Fumadocs. `export const dynamic = "force-dynamic"` auf allen Seiten mit Session-Zugriff.

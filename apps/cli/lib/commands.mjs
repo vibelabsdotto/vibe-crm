@@ -1067,7 +1067,7 @@ export async function cmdSubscriptionRm(args, ctx) {
   emit(ctx, `✓ Removed subscription ${id}`, { instance: url, ok: true, id });
 }
 
-export const MRR_HELP = `vibe-crm mrr — monthly recurring revenue summary (active + trial subscriptions)
+export const MRR_HELP = `vibe-crm mrr — monthly recurring revenue by currency (active + trial subscriptions)
 
 Usage: vibe-crm mrr`;
 
@@ -1080,9 +1080,12 @@ export async function cmdMrr(args, ctx) {
   const data = await request(url, { path: "/v1/subscriptions/summary", token: key });
   if (ctx.json) return emit(ctx, "", { instance: url, ...data });
   const byProduct = Array.isArray(data?.byProduct) ? data.byProduct : [];
+  const byCurrency = Array.isArray(data?.byCurrency) ? data.byCurrency : [{ currency: "EUR", mrr: data?.mrr ?? 0 }];
   console.log(
     [
-      `MRR ${data?.mrr ?? 0} — ${data?.active ?? 0} active, ${data?.trial ?? 0} trial, ${data?.paused ?? 0} paused (${data?.total ?? 0} total)`,
+      `MRR by currency — ${data?.active ?? 0} active, ${data?.trial ?? 0} trial, ${data?.paused ?? 0} paused (${data?.total ?? 0} total)`,
+      table(byCurrency.map((item) => ({ currency: item.currency, mrr: item.mrr ?? 0 })), ["currency", "mrr"]),
+      "Product breakdown in EUR:",
       byProduct.length === 0
         ? "No product breakdown."
         : table(
