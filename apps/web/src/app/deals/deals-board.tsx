@@ -3,7 +3,8 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { ChevronRightIcon, GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type DragEvent, type MouseEvent } from "react";
+import { DealViewSettings } from "@/components/deal-view-settings";
 import { useEntityDrawer } from "@/components/entity-drawer";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -15,12 +16,13 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api";
+import { dealViewValue, formatDealViewValue, isDealFieldVisible, type DealView, type DealViewField } from "@/lib/deal-view";
 import type { Deal, Product, Stage } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 import { cn } from "@/lib/utils";
 
 const DEAL_DRAG_TYPE = "application/x-vibe-crm-deal";
-const rowGrid = "grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 lg:grid-cols-[1.5rem_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_6rem_5.5rem_7.5rem_1.75rem] lg:items-center";
+const rowGrid = "grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] gap-x-2 gap-y-2 lg:min-w-[var(--deal-grid-min-width)] lg:grid-cols-[var(--deal-grid-columns)] lg:items-start";
 type StageOverride = { stage: string; confirmedAt: string | null };
 type SelectOption = { value: string; label: string };
 
@@ -30,17 +32,16 @@ function eur(value: number): string {
   }).format(value);
 }
 
-function contactName(deal: Deal): string {
-  if (deal.contact_name) return deal.contact_name;
-  return [deal.contact_first_name, deal.contact_last_name]
-    .filter((name): name is string => typeof name === "string" && name.length > 0)
-    .join(" ");
-}
-
-function closeDate(value: string): string {
-  if (!value) return "Kein Datum";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("de-DE", { timeZone: "UTC" }).format(date);
+function fieldGridStyle(fields: DealViewField[]): CSSProperties {
+  const tracks = fields.map((field) => {
+    if (field.key === "name" || field.field_type === "text" || field.field_type === "json") return { width: 14, track: "minmax(14rem,1.5fr)" };
+    if (field.field_type === "date" || field.field_type === "boolean" || field.field_type === "integer" || field.field_type === "decimal") return { width: 7, track: "minmax(7rem,0.8fr)" };
+    return { width: 10, track: "minmax(10rem,1fr)" };
+  });
+  return {
+    "--deal-grid-columns": `1.5rem ${tracks.map((item) => item.track).join(" ")} 10.5rem`,
+    "--deal-grid-min-width": `${tracks.reduce((sum, item) => sum + item.width, 13) + (fields.length + 1) * 0.5}rem`,
+  } as CSSProperties;
 }
 
 function DealSelectField({ id, label, items, value, onValueChange, disabled }: {
@@ -64,10 +65,11 @@ function DealSelectField({ id, label, items, value, onValueChange, disabled }: {
   );
 }
 
-export function DealsBoard({ deals, stages, products, initialStage, initialProduct }: {
+export function DealsBoard({ deals, stages, products, initialView, initialStage, initialProduct }: {
   deals: Deal[];
   stages: Stage[];
   products: Product[];
+  initialView: DealView;
   initialStage: string;
   initialProduct: string;
 }) {
@@ -75,6 +77,9 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
   const router = useRouter();
   const { openEntity, createEntity, revision } = useEntityDrawer();
   const previousRevision = useRef(revision);
+  const [viewOverride, setViewOverride] = useState<{ source: DealView; value: DealView } | null>(null);
+  const [configurationOpen, setConfigurationOpen] = useState(false);
+  const view = viewOverride?.source === initialView ? viewOverride.value : initialView;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [stageOverrides, setStageOverrides] = useState<Record<string, StageOverride>>({});
   const [removedIds, setRemovedIds] = useState<Set<string>>(() => new Set());
@@ -131,10 +136,11 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
   // A stage filter must not remove possible drop targets during a drag.
   const visibleStages = initialStage && !draggingId ? ordered.filter((stage) => stage.key === initialStage) : ordered;
   const totalValue = filteredDeals.reduce((sum, deal) => sum + (deal.value ?? 0), 0);
-  const rowBusy = movingId !== null || deleting || filterPending;
+  const rowBusy = movingId !== null || deleting || filterPending || configurationOpen;
+  const columnFields = useMemo(() => view.columns.flatMap((key) => view.fields.filter((field) => field.key === key)), [view]);
 
   function pushFilters(nextStage: string, nextProduct: string) {
-    if (mutationPending.current || dragDealId.current) return;
+    if (mutationPending.current || dragDealId.current || configurationOpen) return;
     const query = new URLSearchParams();
     if (nextStage) query.set("stage", nextStage);
     if (nextProduct) query.set("product", nextProduct);
@@ -150,7 +156,7 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
   }
 
   async function move(deal: Deal, nextStage: string) {
-    if (mutationPending.current || filterPending || !ordered.some((stage) => stage.key === nextStage) || nextStage === deal.stage) return;
+    if (mutationPending.current || filterPending || configurationOpen || !ordered.some((stage) => stage.key === nextStage) || nextStage === deal.stage) return;
     mutationPending.current = true;
     const previous = stageOverrides[deal.id];
     setMovingId(deal.id);
@@ -256,12 +262,14 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
           <DealSelectField id="deal-product-filter" label="Produkt filtern" value={initialProduct} onValueChange={(value) => pushFilters(initialStage, value)} items={[{ value: "", label: "Alle Produkte" }, ...products.map((item) => ({ value: item.key, label: item.name }))]} disabled={rowBusy || draggingId !== null} />
         </FieldGroup>
         <p className="text-sm text-muted-foreground" role="status">{filterPending ? "Filter wird geladen…" : `${filteredDeals.length} Deals · ${eur(totalValue)}`}</p>
+        <DealViewSettings view={view} stages={stages} disabled={rowBusy || draggingId !== null || deleteDeal !== null} onOpenChange={setConfigurationOpen} onViewChange={(next) => setViewOverride({ source: initialView, value: next })} />
         <Button ref={createButton} type="button" onClick={(event) => createEntity("deal", {}, event.currentTarget)} className="sm:ml-auto" disabled={rowBusy || draggingId !== null}>
           <PlusIcon data-icon="inline-start" />Deal anlegen
         </Button>
       </div>
 
       {error && <Alert variant="destructive"><AlertTitle>Deal nicht verschoben</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+      {view.warnings.length > 0 && <Alert><AlertTitle>Ansicht bereinigt</AlertTitle><AlertDescription><ul className="flex list-disc flex-col gap-1 pl-4">{view.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul></AlertDescription></Alert>}
       <p id="deal-move-help" className="text-xs text-muted-foreground">Am Griff in eine Stage ziehen, auch wenn sie leer oder eingeklappt ist. Alternativ die Stage am Deal auswählen.</p>
       <p className="sr-only" role="status">{movingId ? "Stage-Wechsel wird gespeichert." : draggingId ? "Alle Stages sind jetzt als Drop-Ziel verfügbar." : ""}</p>
 
@@ -271,12 +279,11 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
         <Empty className="border"><EmptyHeader><EmptyTitle>Stage nicht gefunden</EmptyTitle><EmptyDescription>Die gewählte Stage ist nicht mehr verfügbar. Wähle eine andere Stage im Filter.</EmptyDescription></EmptyHeader></Empty>
       ) : (
         <div className="flex min-w-0 flex-col gap-4" aria-label="Deal-Pipeline" aria-busy={filterPending}>
-          <div className={cn(rowGrid, "hidden px-2 text-xs text-muted-foreground lg:grid")} aria-hidden="true">
-            <span /><span>Deal</span><span>Firma</span><span>Kontakt</span><span>Produkt</span><span className="text-right">Wert</span><span>Abschluss</span><span>Stage</span><span />
-          </div>
           {visibleStages.map((stage) => {
             const rows = groupedDeals.get(stage.key) ?? [];
             const value = rows.reduce((sum, deal) => sum + (deal.value ?? 0), 0);
+            const fields = columnFields.filter((field) => isDealFieldVisible(field.key, stage, view.visibility));
+            const gridStyle = fieldGridStyle(fields);
             return (
               <Collapsible.Root key={stage.key} open={!collapsed.has(stage.key)} onOpenChange={(open) => setCollapsed((current) => {
                 const next = new Set(current);
@@ -301,6 +308,10 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
                   {dropStage === stage.key && <span className="text-xs font-medium">Hier ablegen</span>}
                 </div>
                 <Collapsible.Panel>
+                  <div className="min-w-0 overflow-x-auto" style={gridStyle}>
+                    <div className={cn(rowGrid, "hidden px-2 pb-1 text-xs text-muted-foreground lg:grid")} aria-hidden="true" data-stage-columns={stage.key}>
+                      <span />{fields.map((field) => <span key={field.key} data-field-key={field.key} className="min-w-0 break-words">{field.label}</span>)}<span>Stage / Aktionen</span>
+                    </div>
                   {rows.length === 0 ? (
                     <Empty className="min-h-0 items-start px-10 py-3"><EmptyHeader className="items-start"><EmptyTitle>Keine Deals</EmptyTitle><EmptyDescription>{draggingId ? "Deal hier ablegen." : "Keine Deals für die aktuelle Auswahl. Hier kann ein Deal abgelegt werden."}</EmptyDescription></EmptyHeader></Empty>
                   ) : (
@@ -310,18 +321,20 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
                           className={cn(rowGrid, "rounded-md px-2 py-2 transition-colors hover:bg-muted/60 lg:py-1", draggingId === deal.id && "opacity-40", movingId === deal.id && "opacity-60")}>
                           <Button type="button" variant="ghost" size="icon-xs" draggable={!rowBusy} disabled={rowBusy} className="row-start-1 cursor-grab active:cursor-grabbing lg:row-auto"
                             aria-label={`Deal ${deal.name} ziehen`} aria-describedby="deal-move-help" onClick={(event) => event.stopPropagation()} onDragStart={(event) => dragStart(event, deal)} onDragEnd={(event) => finishDrag(event.timeStamp)}><GripVerticalIcon /></Button>
-                          <Button data-deal-opener type="button" variant="ghost" disabled={rowBusy} className="col-start-2 row-start-1 h-auto min-h-7 min-w-0 justify-start px-0 whitespace-normal lg:col-auto lg:row-auto lg:whitespace-nowrap"
-                            title={deal.name} onClick={(event) => {
-                              if (!mutationPending.current && event.timeStamp >= suppressClickUntil.current) openEntity("deal", deal.id, event.currentTarget);
-                            }}><span className="min-w-0 break-words text-left lg:truncate">{deal.name}</span></Button>
-                          <div className="col-start-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground lg:contents">
-                            <span className="max-w-full truncate" title={deal.company_name || "Keine Firma"}><span className="sr-only">Firma: </span>{deal.company_name || "Keine Firma"}</span>
-                            <span className="max-w-full truncate" title={contactName(deal) || "Kein Kontakt"}><span className="sr-only">Kontakt: </span>{contactName(deal) || "Kein Kontakt"}</span>
-                            <span className="max-w-full truncate" title={deal.product_name || "Kein Produkt"}><span className="sr-only">Produkt: </span>{deal.product_name || "Kein Produkt"}</span>
-                            <span className="font-medium text-foreground tabular-nums lg:text-right"><span className="sr-only">Wert: </span>{eur(deal.value ?? 0)}</span>
-                            <span className="max-w-full truncate tabular-nums" title={`Abschluss: ${closeDate(deal.close_date)}`}><span className="sr-only">Abschluss: </span>{closeDate(deal.close_date)}</span>
-                          </div>
-                          <div className="col-start-2 flex min-w-0 items-center justify-end gap-2 lg:contents">
+                          {fields.map((field) => {
+                            const formatted = formatDealViewValue(dealViewValue(deal, field), field);
+                            return <div key={field.key} data-field-key={field.key} className="col-start-2 min-w-0 lg:col-auto">
+                              {field.key === "name" ? <Button data-deal-opener type="button" variant="ghost" disabled={rowBusy} className="h-auto min-h-7 w-full min-w-0 justify-start px-0 whitespace-normal"
+                                title={deal.name} onClick={(event) => {
+                                  if (!rowBusy && !mutationPending.current && event.timeStamp >= suppressClickUntil.current) openEntity("deal", deal.id, event.currentTarget);
+                                }}><span className="min-w-0 break-words text-left [overflow-wrap:anywhere]">{formatted}</span></Button>
+                                : <div className="flex min-w-0 flex-col gap-0.5 py-0.5 text-xs text-muted-foreground">
+                                  <span className="font-medium lg:sr-only">{field.label}</span>
+                                  <span className={cn("min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]", (field.field_type === "integer" || field.field_type === "decimal" || field.field_type === "date" || field.field_type === "datetime") && "tabular-nums", field.key === "value" && "font-medium text-foreground")}>{formatted}</span>
+                                </div>}
+                            </div>;
+                          })}
+                          <div className="col-start-2 flex min-w-0 flex-wrap items-center justify-end gap-2 lg:col-auto lg:flex-nowrap">
                             <NativeSelect size="sm" className="w-[7.5rem] max-w-full" value={deal.stage} disabled={rowBusy} aria-label={`Stage für ${deal.name}`} aria-describedby="deal-move-help" onChange={(event) => { void move(deal, event.target.value); }}>
                               {stageItems.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}
                             </NativeSelect>
@@ -336,6 +349,7 @@ export function DealsBoard({ deals, stages, products, initialStage, initialProdu
                       ))}
                     </ul>
                   )}
+                  </div>
                 </Collapsible.Panel>
               </Collapsible.Root>
             );

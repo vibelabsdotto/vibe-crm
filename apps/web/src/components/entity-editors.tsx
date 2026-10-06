@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api";
 import { fetchAllCrm } from "@/lib/crm-lists";
+import { isDealFieldVisible, type DealView } from "@/lib/deal-view";
 import type { EntityDefaults, EntityEditorProps, EntityRecord } from "@/lib/entity-drawer-types";
 import type { Company, Contact, CustomFieldDef, Deal, Product, Stage, Subscription } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
@@ -25,7 +26,7 @@ type EditableType = "company" | "contact" | "deal";
 type EditableRecord = Company | Contact | Deal;
 type Values = Record<string, string>;
 type Options = { required?: boolean; enum?: unknown[]; min?: number; max?: number };
-type Resources = { defs: CustomFieldDef[]; companies: Company[]; contacts: Contact[]; products: Product[]; stages: Stage[] };
+type Resources = { defs: CustomFieldDef[]; companies: Company[]; contacts: Contact[]; products: Product[]; stages: Stage[]; dealView: DealView | null };
 const PATHS = { company: "/v1/companies", contact: "/v1/contacts", deal: "/v1/deals" };
 const LABELS = { company: "Firma", contact: "Kontakt", deal: "Deal" };
 const STATUS_ITEMS = [{ value: "lead", label: "Lead" }, { value: "active", label: "Aktiv" }, { value: "inactive", label: "Inaktiv" }, { value: "churned", label: "Abgewandert" }];
@@ -44,6 +45,20 @@ function fieldOptions(def: CustomFieldDef): Options {
 function list<T>(response: unknown, key: string): T[] {
   if (!response || typeof response !== "object" || !Array.isArray((response as Record<string, unknown>)[key])) throw new Error("Ungültige Listen-Antwort.");
   return (response as Record<string, T[]>)[key];
+}
+
+function dealViewFrom(response: unknown): DealView {
+  if (!response || typeof response !== "object") throw new Error("Ungültige Deal-Konfiguration.");
+  const view = response as DealView;
+  if (
+    !Array.isArray(view.fields) || !Array.isArray(view.columns) || !Array.isArray(view.default_columns) ||
+    !Array.isArray(view.warnings) || view.warnings.some((warning) => typeof warning !== "string") ||
+    !view.visibility || typeof view.visibility !== "object" || Array.isArray(view.visibility)
+  ) throw new Error("Ungültige Deal-Konfiguration.");
+  for (const rule of Object.values(view.visibility)) {
+    if (!rule || typeof rule !== "object" || (rule.mode !== "lost" && (rule.mode !== "stages" || !Array.isArray(rule.stages) || rule.stages.some((stage) => typeof stage !== "string")))) throw new Error("Ungültige Deal-Sichtbarkeitsregel.");
+  }
+  return view;
 }
 
 function recordFrom<T extends EntityRecord>(response: unknown, key: EditableType): T {
@@ -101,12 +116,13 @@ function useResources(type: EditableType) {
       type === "deal" ? fetchAllCrm<Contact>("/v1/contacts?sort=first_name&order=asc", "contacts", api) : Promise.resolve([] as Contact[]),
       type === "deal" ? api<unknown>("/v1/products") : Promise.resolve({ products: [] }),
       type === "deal" ? api<unknown>("/v1/stages") : Promise.resolve({ stages: [] }),
+      type === "deal" ? api<unknown>("/v1/deals/view").then(dealViewFrom) : Promise.resolve(null),
     ] as const;
-    Promise.all(requests).then(([definitions, companies, contacts, products, stages]) => {
-      const data = { defs: list<CustomFieldDef>(definitions, "defs"), companies, contacts, products: list<Product>(products, "products"), stages: list<Stage>(stages, "stages").sort((a, b) => a.position - b.position) };
+    Promise.all(requests).then(([definitions, companies, contacts, products, stages, dealView]) => {
+      const data: Resources = { defs: list<CustomFieldDef>(definitions, "defs"), companies, contacts, products: list<Product>(products, "products"), stages: list<Stage>(stages, "stages").sort((a, b) => a.position - b.position), dealView };
       if (active) setState({ attempt, data, error: null });
     }).catch(() => {
-      if (active) setState({ attempt, data: null, error: "Custom Fields und Zuordnungen konnten nicht vollständig geladen werden. Speichern ist deshalb gesperrt." });
+      if (active) setState({ attempt, data: null, error: type === "deal" ? "Custom Fields, Deal-Sichtbarkeit und Zuordnungen konnten nicht vollständig geladen werden. Speichern ist deshalb gesperrt." : "Custom Fields und Zuordnungen konnten nicht vollständig geladen werden. Speichern ist deshalb gesperrt." });
     });
     return () => { active = false; };
   }, [api, type, attempt]);
@@ -142,6 +158,10 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
   const locked = busy || unconfirmed !== null;
   const contacts = resources.contacts.filter((contact) => !values.company_id || contact.company_id === values.company_id);
   const selectedContact = resources.contacts.find((contact) => contact.id === values.contact_id);
+  const selectedStage = resources.stages.find((stage) => stage.key === values.stage);
+  const visibleDefs = type === "deal" ? resources.defs.filter((def) => resources.dealView && isDealFieldVisible(def.key, selectedStage, resources.dealView.visibility)) : resources.defs;
+  const hiddenCustomChanges = resources.defs.filter((def) => !visibleDefs.includes(def) && custom[def.key] !== initialCustom[def.key]);
+  const viewWarnings = resources.dealView?.warnings ?? [];
 
   function change(key: string, value: string) {
     if (locked) return;
@@ -165,6 +185,10 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
   }
 
   function validate(): { body: Record<string, unknown>; customPayload: Record<string, unknown> } | null {
+    if (type === "deal" && !resources.dealView) {
+      setError("Die Deal-Sichtbarkeit ist nicht geladen. Speichern ist deshalb gesperrt.");
+      return null;
+    }
     const invalid: Values = {};
     const body: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(values)) body[key] = key.endsWith("_id") ? value || null : value.trim();
@@ -179,7 +203,8 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
       if (values.contact_id && (!selectedContact || selectedContact.company_id !== (values.company_id || null))) invalid.contact_id = "Der Kontakt muss zur gewählten Firma gehören.";
     }
     const customPayload: Record<string, unknown> = {};
-    for (const def of resources.defs) {
+    // Visibility only filters this write; all stored and draft values stay in state.
+    for (const def of visibleDefs) {
       const value = custom[def.key] ?? "";
       if (record && value === initialCustom[def.key]) continue;
       const options = fieldOptions(def);
@@ -318,6 +343,7 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
   return <div className="flex min-w-0 flex-col gap-6">
     {record && <EntityTimestamps createdAt={record.created_at} updatedAt={record.updated_at} />}
     <form onSubmit={submit} aria-busy={busy} className="flex min-w-0 flex-col gap-5">
+      {viewWarnings.length > 0 && <Alert><AlertTitle>Hinweise zur Deal-Sichtbarkeit</AlertTitle><AlertDescription><ul className="flex list-disc flex-col gap-1 pl-4">{viewWarnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul></AlertDescription></Alert>}
       <FieldGroup className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
         {type === "company" && <>{textField("name", "Name", "text", true)}{textField("domain", "Domain")}{textField("industry", "Branche")}{textField("phone", "Telefon", "tel")}{textField("email", "E-Mail", "email")}{textField("notes", "Notizen", "text", false, true)}</>}
         {type === "contact" && <>{textField("first_name", "Vorname", "text", true)}{textField("last_name", "Nachname")}{textField("email", "E-Mail", "email")}{textField("phone", "Telefon", "tel")}{textField("title", "Position")}{relationField("status", "Status", STATUS_ITEMS, undefined, "Status wählen")}{relationField("company_id", "Firma", resources.companies.map((company) => ({ value: company.id, label: company.name })), "company")}</>}
@@ -331,10 +357,10 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
           {textField("notes", "Notizen", "text", false, true)}
         </>}
       </FieldGroup>
-      {resources.defs.length > 0 && <FieldSet disabled={locked}>
+      {visibleDefs.length > 0 && <FieldSet disabled={locked}>
         <FieldLegend>Custom Fields</FieldLegend>
         <FieldGroup className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-          {resources.defs.map((def) => {
+          {visibleDefs.map((def) => {
             const options = fieldOptions(def);
             const fieldId = `${id}-custom-${def.key}`;
             const value = custom[def.key] ?? "";
@@ -350,6 +376,7 @@ function EntityForm<T extends EditableRecord>({ type, resources, record, default
           })}
         </FieldGroup>
       </FieldSet>}
+      {hiddenCustomChanges.length > 0 && <Alert><AlertTitle>Ausgeblendete Änderungen</AlertTitle><AlertDescription>Deine Eingaben für {hiddenCustomChanges.map((def) => def.label).join(", ")} bleiben beim Stage-Wechsel erhalten. Beim Speichern werden diese ausgeblendeten Eingaben nicht übernommen und danach durch den gespeicherten Stand ersetzt. Wähle zuvor eine passende Stage, wenn du sie speichern möchtest.</AlertDescription></Alert>}
       {error && <Alert variant="destructive"><AlertTitle>{unconfirmed ? "Speichern noch nicht bestätigt" : "Aktion nicht abgeschlossen"}</AlertTitle><AlertDescription className="flex flex-col gap-3"><p>{error}</p>{unconfirmed === "verify" && <Button type="button" variant="outline" disabled={busy} className="w-fit" onClick={() => void retryVerification()}>{busy && <Spinner data-icon="inline-start" />}Speichern prüfen</Button>}</AlertDescription></Alert>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>Schließen</Button>
