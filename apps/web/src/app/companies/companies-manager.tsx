@@ -2,7 +2,8 @@
 
 import { Building2, Loader2, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState, useTransition, type ComponentProps } from "react";
+import { useRef, useState, useTransition, type ComponentProps, type MouseEvent } from "react";
+import { useEntityDrawer } from "@/components/entity-drawer";
 import { ImportDialog } from "@/components/import-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,139 +11,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import type { Company } from "@/lib/types";
 
-type CompanyFormState = {
-  name: string;
-  domain: string;
-  industry: string;
-  phone: string;
-  email: string;
-  notes: string;
-};
+const entityButtonClassName = "h-auto max-w-full justify-start whitespace-normal p-0 text-left";
 
 type DialogFinalFocus = ComponentProps<typeof DialogContent>["finalFocus"];
-
-function emptyForm(): CompanyFormState {
-  return { name: "", domain: "", industry: "", phone: "", email: "", notes: "" };
-}
-
-function CompanyDialog({ company, onClose, finalFocus }: { company: Company | null; onClose: () => void; finalFocus: DialogFinalFocus }) {
-  const api = useApi();
-  const router = useRouter();
-  const [open, setOpen] = useState(true);
-  const [form, setForm] = useState<CompanyFormState>(() =>
-    company
-      ? {
-          name: company.name,
-          domain: company.domain,
-          industry: company.industry,
-          phone: company.phone,
-          email: company.email,
-          notes: company.notes,
-        }
-      : emptyForm(),
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [nameError, setNameError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const pending = useRef(false);
-
-  function set<K extends keyof CompanyFormState>(key: K, value: CompanyFormState[K]) {
-    setForm((current) => ({ ...current, [key]: value }));
-    if (key === "name") setNameError(null);
-  }
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (pending.current) return;
-    if (!form.name.trim()) {
-      setNameError("Bitte gib einen Firmennamen ein.");
-      return;
-    }
-    pending.current = true;
-    setBusy(true);
-    setError(null);
-    setNameError(null);
-    try {
-      const body = {
-        name: form.name.trim(),
-        domain: form.domain.trim(),
-        industry: form.industry.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim(),
-        notes: form.notes.trim(),
-      };
-      if (company) await api(`/v1/companies/${encodeURIComponent(company.id)}`, { method: "PUT", body });
-      else await api("/v1/companies", { method: "POST", body });
-      toast.add({ title: company ? "Firma gespeichert" : "Firma angelegt", type: "success" });
-      router.refresh();
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof ApiError ? `Speichern fehlgeschlagen: ${err.code}` : "Speichern fehlgeschlagen. Bitte versuche es erneut.");
-      pending.current = false;
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} disablePointerDismissal={busy} onOpenChange={(nextOpen, details) => {
-      if (pending.current) { details.cancel(); return; }
-      setOpen(nextOpen);
-    }} onOpenChangeComplete={(nextOpen) => { if (!nextOpen) onClose(); }}>
-      <DialogContent showCloseButton={false} finalFocus={finalFocus} className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>{company ? "Firma bearbeiten" : "Firma anlegen"}</DialogTitle>
-          <DialogDescription>Pflege Firmen- und Kontaktdaten. Der Firmenname ist ein Pflichtfeld.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} aria-busy={busy} className="flex min-h-0 flex-1 flex-col gap-4">
-          <FieldGroup className="grid min-h-0 grid-cols-1 gap-4 overflow-y-auto p-1 sm:grid-cols-2">
-            <Field data-disabled={busy} data-invalid={Boolean(nameError)}>
-              <FieldLabel htmlFor="company-name">Name *</FieldLabel>
-              <Input id="company-name" name="name" autoComplete="organization" value={form.name} onChange={(event) => set("name", event.target.value)} required disabled={busy} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? "company-name-error" : undefined} />
-              {nameError && <FieldError id="company-name-error">{nameError}</FieldError>}
-            </Field>
-            <Field data-disabled={busy}>
-              <FieldLabel htmlFor="company-domain">Domain</FieldLabel>
-              <Input id="company-domain" name="domain" placeholder="example.com" value={form.domain} onChange={(event) => set("domain", event.target.value)} disabled={busy} />
-            </Field>
-            <Field data-disabled={busy}>
-              <FieldLabel htmlFor="company-industry">Branche</FieldLabel>
-              <Input id="company-industry" name="industry" value={form.industry} onChange={(event) => set("industry", event.target.value)} disabled={busy} />
-            </Field>
-            <Field data-disabled={busy}>
-              <FieldLabel htmlFor="company-phone">Telefon</FieldLabel>
-              <Input id="company-phone" name="phone" type="tel" autoComplete="tel" value={form.phone} onChange={(event) => set("phone", event.target.value)} disabled={busy} />
-            </Field>
-            <Field data-disabled={busy}>
-              <FieldLabel htmlFor="company-email">E-Mail</FieldLabel>
-              <Input id="company-email" name="email" type="email" autoComplete="email" value={form.email} onChange={(event) => set("email", event.target.value)} disabled={busy} />
-            </Field>
-            <Field data-disabled={busy} className="sm:col-span-2">
-              <FieldLabel htmlFor="company-notes">Notizen</FieldLabel>
-              <Textarea id="company-notes" name="notes" rows={4} value={form.notes} onChange={(event) => set("notes", event.target.value)} disabled={busy} />
-            </Field>
-            {error && <Alert variant="destructive" className="sm:col-span-2"><AlertTitle>Firma nicht gespeichert</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
-          </FieldGroup>
-          <DialogFooter className="shrink-0">
-            <DialogClose render={<Button type="button" variant="outline" disabled={busy} />}>Abbrechen</DialogClose>
-            <Button type="submit" disabled={busy}>
-              {busy && <Loader2 data-icon="inline-start" className="animate-spin" aria-hidden="true" />}
-              {busy ? "Speichert…" : "Speichern"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function DeleteCompanyDialog({ company, onClose, finalFocus }: { company: Company; onClose: () => void; finalFocus: DialogFinalFocus }) {
   const api = useApi();
@@ -196,7 +75,7 @@ function DeleteCompanyDialog({ company, onClose, finalFocus }: { company: Compan
 export function CompaniesManager({ companies, total }: { companies: Company[]; total: number }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [dialog, setDialog] = useState<{ open: boolean; company: Company | null }>({ open: false, company: null });
+  const { openEntity, createEntity } = useEntityDrawer();
   const [deleteCompany, setDeleteCompany] = useState<Company | null>(null);
   const [search, setSearch] = useState(searchParams.get("search") ?? "");
   const [industry, setIndustry] = useState(searchParams.get("industry") ?? "");
@@ -207,6 +86,15 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
   function finalFocus() {
     const target = opener.current;
     return target?.isConnected && target.getClientRects().length > 0 ? target : createButton.current;
+  }
+
+  function openCompanyRow(event: MouseEvent<HTMLElement>, id: string) {
+    const target = event.target;
+    const row = event.currentTarget;
+    if (event.defaultPrevented || !(target instanceof Element) || !row.contains(target)) return;
+    const control = target.closest("button, a, input, select, textarea, [role='button'], [role='link'], [role='menuitem'], [role='checkbox'], [role='switch'], [role='combobox'], [contenteditable='true']");
+    if (control && row.contains(control)) return;
+    openEntity("company", id, row.querySelector<HTMLButtonElement>("[data-entity-opener]") ?? createButton.current ?? undefined);
   }
 
   function applyFilters() {
@@ -237,7 +125,7 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
         </form>
         <div className="flex flex-wrap items-center gap-2">
           <ImportDialog entity="companies" />
-          <Button ref={createButton} type="button" className="min-h-11 md:min-h-8" onClick={(event) => { opener.current = event.currentTarget; setDialog({ open: true, company: null }); }}><Plus data-icon="inline-start" aria-hidden="true" /> Firma anlegen</Button>
+          <Button ref={createButton} data-entity-drawer-focus-fallback type="button" className="min-h-11 md:min-h-8" onClick={(event) => createEntity("company", undefined, event.currentTarget)}><Plus data-icon="inline-start" aria-hidden="true" /> Firma anlegen</Button>
         </div>
       </div>
 
@@ -250,7 +138,7 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
             <EmptyTitle>Keine Firmen gefunden</EmptyTitle>
             <EmptyDescription>Passe die Filter an oder lege eine Firma an.</EmptyDescription>
           </EmptyHeader>
-          <EmptyContent><Button type="button" onClick={(event) => { opener.current = event.currentTarget; setDialog({ open: true, company: null }); }}><Plus data-icon="inline-start" aria-hidden="true" /> Firma anlegen</Button></EmptyContent>
+          <EmptyContent><Button type="button" onClick={(event) => createEntity("company", undefined, event.currentTarget)}><Plus data-icon="inline-start" aria-hidden="true" /> Firma anlegen</Button></EmptyContent>
         </Empty>
       ) : (
         <>
@@ -269,9 +157,12 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
                 </TableHeader>
                 <TableBody>
                   {companies.map((company) => (
-                    <TableRow key={company.id}>
+                    <TableRow key={company.id} className="cursor-pointer" onClick={(event) => openCompanyRow(event, company.id)}>
                       <TableCell className="max-w-64 whitespace-normal pl-4">
-                        <p className="break-words font-medium">{company.name}</p>
+                        <div className="flex flex-col items-start gap-1">
+                          <Button data-entity-opener type="button" variant="link" className={entityButtonClassName} onClick={(event) => openEntity("company", company.id, event.currentTarget)}>{company.name}</Button>
+                          {company.is_own_company === true && <Badge variant="outline" className="max-w-full whitespace-normal">Eigenes Unternehmen</Badge>}
+                        </div>
                         {company.email && <p className="mt-1 break-words text-xs text-muted-foreground">{company.email}</p>}
                       </TableCell>
                       <TableCell className="hidden max-w-48 whitespace-normal break-words lg:table-cell">{company.domain || "Nicht hinterlegt"}</TableCell>
@@ -279,7 +170,7 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
                       <TableCell className="hidden lg:table-cell"><Badge variant="secondary">{company.contact_count ?? "Unbekannt"}</Badge></TableCell>
                       <TableCell className="pr-4">
                         <div className="flex justify-end gap-2">
-                          <Button type="button" variant="outline" size="sm" onClick={(event) => { opener.current = event.currentTarget; setDialog({ open: true, company }); }} aria-label={`${company.name} bearbeiten`}>Bearbeiten</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={(event) => openEntity("company", company.id, event.currentTarget)} aria-label={`${company.name} bearbeiten`}>Bearbeiten</Button>
                           <Button type="button" variant="destructive" size="sm" onClick={(event) => { opener.current = event.currentTarget; setDeleteCompany(company); }} aria-label={`${company.name} löschen`}>Löschen</Button>
                         </div>
                       </TableCell>
@@ -292,12 +183,13 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
 
           <div className="grid min-w-0 grid-cols-1 gap-3 md:hidden">
             {companies.map((company) => (
-              <Card key={company.id} size="sm" className="min-w-0">
+              <Card key={company.id} size="sm" className="min-w-0 cursor-pointer" onClick={(event) => openCompanyRow(event, company.id)}>
                 <CardHeader>
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <CardTitle className="min-w-0 break-words">{company.name}</CardTitle>
+                    <CardTitle className="min-w-0 break-words"><Button data-entity-opener type="button" variant="link" className={entityButtonClassName} onClick={(event) => openEntity("company", company.id, event.currentTarget)}>{company.name}</Button></CardTitle>
                     {company.contact_count != null && <Badge variant="secondary">{company.contact_count} Kontakte</Badge>}
                   </div>
+                  {company.is_own_company === true && <Badge variant="outline" className="max-w-full whitespace-normal">Eigenes Unternehmen</Badge>}
                   <CardDescription className="break-words">{company.industry || "Keine Branche hinterlegt"}</CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -307,7 +199,7 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
                   </dl>
                 </CardContent>
                 <CardFooter className="flex-wrap gap-2">
-                  <Button type="button" variant="outline" className="min-h-11" onClick={(event) => { opener.current = event.currentTarget; setDialog({ open: true, company }); }} aria-label={`${company.name} bearbeiten`}>Bearbeiten</Button>
+                  <Button type="button" variant="outline" className="min-h-11" onClick={(event) => openEntity("company", company.id, event.currentTarget)} aria-label={`${company.name} bearbeiten`}>Bearbeiten</Button>
                   <Button type="button" variant="destructive" className="min-h-11" onClick={(event) => { opener.current = event.currentTarget; setDeleteCompany(company); }} aria-label={`${company.name} löschen`}>Löschen</Button>
                 </CardFooter>
               </Card>
@@ -316,7 +208,6 @@ export function CompaniesManager({ companies, total }: { companies: Company[]; t
         </>
       )}
 
-      {dialog.open && <CompanyDialog company={dialog.company} finalFocus={finalFocus} onClose={() => setDialog({ open: false, company: null })} />}
       {deleteCompany && <DeleteCompanyDialog company={deleteCompany} finalFocus={finalFocus} onClose={() => setDeleteCompany(null)} />}
     </section>
   );

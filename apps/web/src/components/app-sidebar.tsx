@@ -45,6 +45,7 @@ const navigation = [
 ];
 
 const settingsNavigation = [
+  { href: "/settings/company", label: "Eigenes Unternehmen", icon: Building2 },
   { href: "/settings/products", label: "Produkte", icon: Tags },
   { href: "/settings/properties", label: "Custom Fields", icon: ListFilter },
   { href: "/settings/tokens", label: "API-Tokens", icon: KeyRound },

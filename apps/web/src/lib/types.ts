@@ -11,6 +11,7 @@ export type Company = {
   created_at: string;
   updated_at: string;
   contact_count?: number;
+  is_own_company?: boolean;
   [key: string]: unknown;
 };
 
@@ -39,6 +40,7 @@ export type Deal = {
   company_id: string | null;
   product_id: string | null;
   value: number;
+  effective_company_id?: string | null;
   stage: string;
   close_date: string;
   notes: string;
@@ -141,6 +143,7 @@ export type SubscriptionInterval = "monthly" | "quarterly" | "yearly" | "one_tim
 
 export type Subscription = {
   id: string;
+  deal_id?: string | null;
   company_id: string | null;
   contact_id: string | null;
   product_id: string | null;
@@ -166,6 +169,7 @@ export type SubscriptionSummary = {
   paused: number;
   total: number;
   byProduct: { product: string; productName: string; mrr: number; active: number }[];
+  byCurrency: { currency: string; mrr: number; active: number }[];
 };
 
 /** Listen-Antworten defensiv auspacken (Envelope oder Array). */
