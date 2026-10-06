@@ -93,8 +93,18 @@ export default async function DashboardPage() {
             ))}
             <Link href="/subscriptions" prefetch={false} className="rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
               <Card className="h-full">
-                <CardHeader><CardDescription>MRR</CardDescription></CardHeader>
-                <CardContent><p className="break-words text-2xl font-semibold tracking-tight tabular-nums">{summary ? eur(summary.mrr) : "—"}</p></CardContent>
+                <CardHeader><CardDescription>MRR nach Währung</CardDescription></CardHeader>
+                <CardContent>
+                  {summary ? (
+                    <div className="flex flex-col gap-1">
+                      {(summary.byCurrency?.length ? summary.byCurrency : [{ currency: "EUR", mrr: summary.mrr }]).map((item) => (
+                        <p key={item.currency} className="break-words text-2xl font-semibold tracking-tight tabular-nums">
+                          {new Intl.NumberFormat("de-DE", { maximumFractionDigits: 2 }).format(item.mrr)} {item.currency}
+                        </p>
+                      ))}
+                    </div>
+                  ) : <p className="text-2xl font-semibold">—</p>}
+                </CardContent>
               </Card>
             </Link>
           </section>
@@ -103,7 +113,7 @@ export default async function DashboardPage() {
             <CardHeader>
               <CardTitle><h2>Pipeline</h2></CardTitle>
               <CardDescription>Deals und Volumen nach Stage.</CardDescription>
-              <CardAction><Link href="/deals" className={buttonVariants({ variant: "outline", size: "sm" })}>Zum Board</Link></CardAction>
+              <CardAction><Link href="/deals" className={buttonVariants({ variant: "outline", size: "sm" })}>Zur Pipeline</Link></CardAction>
             </CardHeader>
             <CardContent>
               {stages.length === 0 ? (

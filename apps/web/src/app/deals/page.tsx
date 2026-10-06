@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getSession } from "@/lib/server-auth";
-import { asList, type Company, type Contact, type Deal, type Product, type Stage } from "@/lib/types";
+import { asList, type Deal, type Product, type Stage } from "@/lib/types";
 import { DealsBoard } from "./deals-board";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export const metadata = { title: "Deals" };
 export default async function DealsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stage?: string; product?: string }>;
+  searchParams: Promise<{ stage?: string | string[]; product?: string | string[] }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/sign-in?redirect=%2Fdeals");
@@ -21,25 +21,19 @@ export default async function DealsPage({
 
   let deals: Deal[] = [];
   let stages: Stage[] = [];
-  let contacts: Contact[] = [];
-  let companies: Company[] = [];
   let products: Product[] = [];
   let error: string | null = null;
 
   try {
     const jar = await cookies();
     const cookie = jar.toString();
-    const [boardData, stagesData, contactsData, companiesData, productsData] = await Promise.all([
+    const [boardData, stagesData, productsData] = await Promise.all([
       apiFetch<unknown>("/v1/deals/board", { cookie }),
       apiFetch<unknown>("/v1/stages", { cookie }),
-      apiFetch<unknown>("/v1/contacts?limit=100", { cookie }),
-      apiFetch<unknown>("/v1/companies?limit=100", { cookie }),
       apiFetch<unknown>("/v1/products", { cookie }),
     ]);
     deals = asList<Deal>(boardData, "deals");
     stages = asList<Stage>(stagesData, "stages");
-    contacts = asList<Contact>(contactsData, "contacts");
-    companies = asList<Company>(companiesData, "companies");
     products = asList<Product>(productsData, "products");
   } catch (e) {
     error =
@@ -52,7 +46,7 @@ export default async function DealsPage({
     <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-6">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Deals</h1>
-        <p className="text-sm text-muted-foreground">Verfolge deine Deals und verschiebe sie durch die Pipeline.</p>
+        <p className="text-sm text-muted-foreground">Deals nach Stage, mit Firma, Kontakt, Produkt und Wert auf einen Blick.</p>
       </header>
       {error ? (
         <Alert variant="destructive">
@@ -63,11 +57,9 @@ export default async function DealsPage({
         <DealsBoard
           deals={deals}
           stages={stages}
-          contacts={contacts}
-          companies={companies}
           products={products}
-          initialStage={params.stage ?? ""}
-          initialProduct={params.product ?? ""}
+          initialStage={typeof params.stage === "string" ? params.stage : ""}
+          initialProduct={typeof params.product === "string" ? params.product : ""}
         />
       )}
     </div>
