@@ -37,6 +37,11 @@ export class DealsController {
     return this.deals.board();
   }
 
+  @Get(':id')
+  get(@Param('id') id: string): { deal: Deal } {
+    return { deal: this.deals.get(id) };
+  }
+
   @Post()
   @HttpCode(201)
   create(@Body() body: DealBody): { deal: Deal } {

@@ -23,6 +23,7 @@ export interface Company {
   phone: string;
   email: string;
   notes: string;
+  is_own_company: boolean;
   contact_count?: number;
   created_at: string;
   updated_at: string;
@@ -95,7 +96,73 @@ export class CompaniesService {
          FROM companies c${whereSQL} ORDER BY c.${qid(sortCol)} ${order}, c.id LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset) as Company[];
-    return { companies: rows, total: countRow?.total ?? 0, page, limit };
+    const ownCompanyId = this.workspaceCompanyId();
+    return {
+      companies: rows.map((row) => ({
+        ...row,
+        is_own_company: row.id === ownCompanyId,
+      })),
+      total: countRow?.total ?? 0,
+      page,
+      limit,
+    };
+  }
+
+  get(id: string): Company {
+    return this.require(id);
+  }
+
+  workspaceCompany(): { company_id: string | null; company: Company | null } {
+    const companyId = this.workspaceCompanyId();
+    return {
+      company_id: companyId,
+      company: companyId ? this.require(companyId) : null,
+    };
+  }
+
+  setWorkspaceCompany(body: unknown): {
+    company_id: string | null;
+    company: Company | null;
+  } {
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !('company_id' in body) ||
+      (body.company_id !== null &&
+        (typeof body.company_id !== 'string' || body.company_id === ''))
+    ) {
+      throw new BadRequestException(
+        'Bitte company_id als bestehende Firmen-ID oder null angeben.',
+      );
+    }
+    return this.database.sqlite.transaction(() => {
+      const companyId = body.company_id as string | null;
+      if (
+        companyId !== null &&
+        !this.database.sqlite
+          .prepare('SELECT id FROM companies WHERE id = ?')
+          .get(companyId)
+      ) {
+        throw new BadRequestException('Die ausgewählte Firma existiert nicht.');
+      }
+      this.database.sqlite
+        .prepare(
+          "INSERT INTO workspace_settings (key, company_id) VALUES ('company', ?) ON CONFLICT(key) DO UPDATE SET company_id = excluded.company_id",
+        )
+        .run(companyId);
+      return this.workspaceCompany();
+    })();
+  }
+
+  private workspaceCompanyId(): string | null {
+    const row = this.database.sqlite
+      .prepare(
+        "SELECT company_id FROM workspace_settings WHERE key = 'company'",
+      )
+      .get() as { company_id: string | null } | undefined;
+    return row?.company_id ?? null;
   }
 
   create(body: CompanyBody): Company {
@@ -109,11 +176,12 @@ export class CompaniesService {
     );
     if (missing.length > 0) {
       throw new BadRequestException(
-        `Missing required field(s): ${missing.join(', ')}`,
+        `Erforderliche Felder fehlen: ${missing.join(', ')}`,
       );
     }
     const name = str(body.name);
-    if (!name) throw new BadRequestException('Name is required');
+    if (!name)
+      throw new BadRequestException('Ein Firmenname ist erforderlich.');
     const id = randomUUID();
     const now = new Date().toISOString();
     this.database.sqlite
@@ -146,7 +214,7 @@ export class CompaniesService {
     );
     if (missing.length > 0) {
       throw new BadRequestException(
-        `Missing required field(s): ${missing.join(', ')}`,
+        `Erforderliche Felder fehlen: ${missing.join(', ')}`,
       );
     }
     const fields: string[] = [];
@@ -159,12 +227,14 @@ export class CompaniesService {
     }
     const hasCustom = Object.keys(values).length > 0;
     if (fields.length === 0 && !hasCustom) {
-      throw new BadRequestException('No fields to update');
+      throw new BadRequestException(
+        'Keine Felder zum Aktualisieren angegeben.',
+      );
     }
     this.require(id);
     if (fields.length > 0) {
       if (body.name !== undefined && str(body.name) === '') {
-        throw new BadRequestException('Name cannot be empty');
+        throw new BadRequestException('Der Firmenname darf nicht leer sein.');
       }
       fields.push('updated_at = ?');
       params.push(new Date().toISOString(), id);
@@ -193,9 +263,11 @@ export class CompaniesService {
 
   private require(id: string): Company {
     const row = this.database.sqlite
-      .prepare('SELECT * FROM companies WHERE id = ?')
+      .prepare(
+        'SELECT c.*, (SELECT COUNT(*) FROM contacts WHERE company_id = c.id) as contact_count FROM companies c WHERE c.id = ?',
+      )
       .get(id) as Company | undefined;
     if (!row) throw new NotFoundException('not_found');
-    return row;
+    return { ...row, is_own_company: row.id === this.workspaceCompanyId() };
   }
 }

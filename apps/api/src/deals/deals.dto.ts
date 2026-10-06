@@ -3,6 +3,7 @@ export interface Deal {
   name: string;
   contact_id: string | null;
   company_id: string | null;
+  effective_company_id: string | null;
   product_id: string | null;
   value: number;
   stage: string;
@@ -39,4 +40,5 @@ export interface DealListQuery {
   filters?: string;
   stage?: string;
   product?: string;
+  company_id?: string;
 }

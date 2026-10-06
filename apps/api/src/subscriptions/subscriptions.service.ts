@@ -1,9 +1,23 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import {
+  assertDealLink,
+  effectiveCompany,
+  linkedDeal,
+  requireReference,
+} from '../common/entity-relations';
+import {
+  nullableReference,
+  nonnegativeAmount,
+  validCurrency,
+  validDate,
+  validDateRange,
+} from '../common/entity-validation';
 import {
   buildFilters,
   parseList,
@@ -41,6 +55,7 @@ export const SUBSCRIPTION_STATUSES = [
 ] as const;
 
 const SUB_FIELDS = [
+  'deal_id',
   'company_id',
   'contact_id',
   'product_id',
@@ -66,31 +81,7 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
-/** Nullable FK input: undefined/null/'' → null, otherwise the trimmed id. */
-function refId(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  const raw =
-    typeof v === 'string'
-      ? v
-      : typeof v === 'number' || typeof v === 'boolean'
-        ? String(v)
-        : null;
-  if (raw === null) return null;
-  const s = raw.trim();
-  return s === '' ? null : s;
-}
-
-function num(v: unknown): number {
-  const n =
-    typeof v === 'number'
-      ? v
-      : typeof v === 'string'
-        ? Number(v.trim())
-        : Number(v);
-  if (!Number.isFinite(n))
-    throw new BadRequestException('Invalid amount — must be a number');
-  return n;
-}
+type SubscriptionValues = Pick<Subscription, (typeof SUB_FIELDS)[number]>;
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -109,6 +100,7 @@ export class SubscriptionsService {
     const { page, limit, offset, order, search } = parseList(query);
     const status = str(query.status);
     const companyId = str(query.company_id);
+    const dealId = str(query.deal_id);
     const product = str(query.product);
     const cols = tableColumns(this.database.sqlite, 'subscriptions');
     let sortCol = query.sort ?? 'id';
@@ -131,6 +123,10 @@ export class SubscriptionsService {
     if (product) {
       where.push('s.product_id = ?');
       params.push(product);
+    }
+    if (dealId) {
+      where.push('s.deal_id = ?');
+      params.push(dealId);
     }
     const flt = buildFilters(cols, query.filters, 's.');
     where.push(...flt.clauses);
@@ -156,12 +152,13 @@ export class SubscriptionsService {
   summary(): SubscriptionSummary {
     const rows = this.database.sqlite
       .prepare(
-        'SELECT status, "interval" as subscription_interval, amount, product_id FROM subscriptions',
+        'SELECT status, "interval" as subscription_interval, amount, currency, product_id FROM subscriptions',
       )
       .all() as Array<{
       status: string;
       subscription_interval: string;
       amount: number;
+      currency: string;
       product_id: string | null;
     }>;
     const names = this.database.sqlite
@@ -176,6 +173,10 @@ export class SubscriptionsService {
     const by = new Map<
       string,
       { product: string; productName: string; mrr: number; active: number }
+    >();
+    const currencies = new Map<
+      string,
+      { currency: string; mrr: number; active: number }
     >();
     for (const row of rows) {
       if (row.status === 'active') active += 1;
@@ -192,6 +193,16 @@ export class SubscriptionsService {
               ? 1 / 12
               : 0;
       const contribution = (Number(row.amount) || 0) * weight;
+      const currency = currencies.get(row.currency) ?? {
+        currency: row.currency,
+        mrr: 0,
+        active: 0,
+      };
+      currency.mrr += contribution;
+      currency.active += 1;
+      currencies.set(row.currency, currency);
+      // Preserve the legacy EUR totals without combining currencies.
+      if (row.currency !== 'EUR') continue;
       mrr += contribution;
       const key = row.product_id ?? '';
       const entry = by.get(key) ?? {
@@ -210,6 +221,9 @@ export class SubscriptionsService {
       trial,
       paused,
       total: rows.length,
+      byCurrency: [...currencies.values()]
+        .map((entry) => ({ ...entry, mrr: round2(entry.mrr) }))
+        .sort((a, b) => a.currency.localeCompare(b.currency)),
       byProduct: [...by.values()]
         .map((e) => ({ ...e, mrr: round2(e.mrr) }))
         .sort((a, b) => b.mrr - a.mrr),
@@ -217,148 +231,164 @@ export class SubscriptionsService {
   }
 
   create(body: SubscriptionBody): Subscription {
-    const name = str(body.name);
-    if (!name) throw new BadRequestException('Name is required');
-    const interval =
-      body.interval === undefined ? 'monthly' : str(body.interval);
-    if (!(SUBSCRIPTION_INTERVALS as readonly string[]).includes(interval)) {
-      throw new BadRequestException(
-        `Unknown interval "${interval}". Valid: ${SUBSCRIPTION_INTERVALS.join(', ')}`,
-      );
-    }
-    const status = body.status === undefined ? 'active' : str(body.status);
-    if (!(SUBSCRIPTION_STATUSES as readonly string[]).includes(status)) {
-      throw new BadRequestException(
-        `Unknown status "${status}". Valid: ${SUBSCRIPTION_STATUSES.join(', ')}`,
-      );
-    }
-    const amount = body.amount === undefined ? 0 : num(body.amount);
-    const companyId = refId(body.company_id);
-    const contactId = refId(body.contact_id);
-    const productId = refId(body.product_id);
-    this.requireRef('companies', companyId, 'company_id');
-    this.requireRef('contacts', contactId, 'contact_id');
-    this.requireProduct(productId);
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    this.database.sqlite
-      .prepare(
-        'INSERT INTO subscriptions (id, company_id, contact_id, product_id, name, amount, currency, "interval", start_date, end_date, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        id,
-        companyId,
-        contactId,
-        productId,
-        name,
-        amount,
-        body.currency === undefined ? 'EUR' : str(body.currency),
-        interval,
-        str(body.start_date),
-        str(body.end_date),
-        status,
-        str(body.notes),
-        now,
-        now,
-      );
-    return this.require(id);
+    return this.database.sqlite
+      .transaction(() => {
+        const dealId = nullableReference(body.deal_id, 'deal_id');
+        const replay = dealId
+          ? (this.database.sqlite
+              .prepare('SELECT id FROM subscriptions WHERE deal_id = ?')
+              .get(dealId) as { id: string } | undefined)
+          : undefined;
+        if (replay) {
+          const existing = this.require(replay.id);
+          const candidate = this.writeValues(body, existing);
+          if (
+            SUB_FIELDS.some((field) => candidate[field] !== existing[field])
+          ) {
+            throw new ConflictException(
+              'Für diesen Deal existiert bereits ein Vertrag mit anderen Angaben. Bitte den bestehenden Vertrag bearbeiten.',
+            );
+          }
+          return existing;
+        }
+        const values = this.writeValues(body);
+        this.validateRelations(values);
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        this.database.sqlite
+          .prepare(
+            `INSERT INTO subscriptions (id, ${SUB_FIELDS.map(qid).join(', ')}, created_at, updated_at) VALUES (${Array(
+              SUB_FIELDS.length + 3,
+            )
+              .fill('?')
+              .join(', ')})`,
+          )
+          .run(id, ...SUB_FIELDS.map((field) => values[field]), now, now);
+        return this.require(id);
+      })
+      .immediate();
   }
 
   update(id: string, body: SubscriptionBody): Subscription {
-    const fields: string[] = [];
-    const params: unknown[] = [];
-    for (const key of SUB_FIELDS) {
-      if (body[key] === undefined) continue;
-      switch (key) {
-        case 'company_id': {
-          const companyId = this.requireRef(
-            'companies',
-            refId(body.company_id),
-            'company_id',
+    return this.database.sqlite
+      .transaction(() => {
+        const existing = this.require(id);
+        if (!SUB_FIELDS.some((field) => body[field] !== undefined)) {
+          throw new BadRequestException(
+            'Keine Felder zum Aktualisieren angegeben.',
           );
-          fields.push('company_id = ?');
-          params.push(companyId);
-          break;
         }
-        case 'contact_id': {
-          const contactId = this.requireRef(
-            'contacts',
-            refId(body.contact_id),
-            'contact_id',
+        const values = this.writeValues(body, existing);
+        this.validateRelations(values);
+        const occupied = values.deal_id
+          ? this.database.sqlite
+              .prepare(
+                'SELECT id FROM subscriptions WHERE deal_id = ? AND id != ?',
+              )
+              .get(values.deal_id, id)
+          : undefined;
+        if (occupied)
+          throw new ConflictException(
+            'Für diesen Deal existiert bereits ein anderer Vertrag.',
           );
-          fields.push('contact_id = ?');
-          params.push(contactId);
-          break;
-        }
-        case 'product_id': {
-          const productId = this.requireProduct(refId(body.product_id));
-          fields.push('product_id = ?');
-          params.push(productId);
-          break;
-        }
-        case 'name': {
-          const name = str(body.name);
-          if (!name) throw new BadRequestException('Name cannot be empty');
-          fields.push('name = ?');
-          params.push(name);
-          break;
-        }
-        case 'amount':
-          fields.push('amount = ?');
-          params.push(num(body.amount));
-          break;
-        case 'currency':
-          fields.push('currency = ?');
-          params.push(str(body.currency));
-          break;
-        case 'interval': {
-          const interval = str(body.interval);
-          if (
-            !(SUBSCRIPTION_INTERVALS as readonly string[]).includes(interval)
-          ) {
-            throw new BadRequestException(
-              `Unknown interval "${interval}". Valid: ${SUBSCRIPTION_INTERVALS.join(', ')}`,
-            );
-          }
-          fields.push('"interval" = ?');
-          params.push(interval);
-          break;
-        }
-        case 'start_date':
-          fields.push('start_date = ?');
-          params.push(str(body.start_date));
-          break;
-        case 'end_date':
-          fields.push('end_date = ?');
-          params.push(str(body.end_date));
-          break;
-        case 'status': {
-          const status = str(body.status);
-          if (!(SUBSCRIPTION_STATUSES as readonly string[]).includes(status)) {
-            throw new BadRequestException(
-              `Unknown status "${status}". Valid: ${SUBSCRIPTION_STATUSES.join(', ')}`,
-            );
-          }
-          fields.push('status = ?');
-          params.push(status);
-          break;
-        }
-        case 'notes':
-          fields.push('notes = ?');
-          params.push(str(body.notes));
-          break;
-      }
-    }
-    if (fields.length === 0) {
-      throw new BadRequestException('No fields to update');
-    }
-    this.require(id);
-    fields.push('updated_at = ?');
-    params.push(new Date().toISOString(), id);
-    this.database.sqlite
-      .prepare(`UPDATE subscriptions SET ${fields.join(', ')} WHERE id = ?`)
-      .run(...params);
+        this.database.sqlite
+          .prepare(
+            `UPDATE subscriptions SET ${SUB_FIELDS.map((field) => `${qid(field)} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            ...SUB_FIELDS.map((field) => values[field]),
+            new Date().toISOString(),
+            id,
+          );
+        return this.require(id);
+      })
+      .immediate();
+  }
+
+  get(id: string): Subscription {
     return this.require(id);
+  }
+
+  private writeValues(
+    body: SubscriptionBody,
+    existing?: Subscription,
+  ): SubscriptionValues {
+    const unknown = Object.keys(body).filter(
+      (field) => !(SUB_FIELDS as readonly string[]).includes(field),
+    );
+    if (unknown.length)
+      throw new BadRequestException(`Unbekannte Felder: ${unknown.join(', ')}`);
+    const dealId =
+      body.deal_id === undefined
+        ? (existing?.deal_id ?? null)
+        : nullableReference(body.deal_id, 'deal_id');
+    // Only initial explicit linkage supplies defaults. Contracts remain independent afterward.
+    const deal = !existing ? linkedDeal(this.database.sqlite, dealId) : null;
+    const values: SubscriptionValues = {
+      deal_id: dealId,
+      company_id:
+        body.company_id === undefined
+          ? (existing?.company_id ?? deal?.company_id ?? null)
+          : nullableReference(body.company_id, 'company_id'),
+      contact_id:
+        body.contact_id === undefined
+          ? (existing?.contact_id ?? deal?.contact_id ?? null)
+          : nullableReference(body.contact_id, 'contact_id'),
+      product_id:
+        body.product_id === undefined
+          ? (existing?.product_id ?? deal?.product_id ?? null)
+          : nullableReference(body.product_id, 'product_id'),
+      name: body.name === undefined ? (existing?.name ?? '') : str(body.name),
+      amount:
+        body.amount === undefined
+          ? (existing?.amount ?? 0)
+          : nonnegativeAmount(body.amount, 'amount'),
+      currency:
+        body.currency === undefined
+          ? (existing?.currency ?? 'EUR')
+          : validCurrency(body.currency),
+      interval:
+        body.interval === undefined
+          ? (existing?.interval ?? 'monthly')
+          : str(body.interval),
+      start_date:
+        body.start_date === undefined
+          ? (existing?.start_date ?? '')
+          : validDate(body.start_date, 'start_date'),
+      end_date:
+        body.end_date === undefined
+          ? (existing?.end_date ?? '')
+          : validDate(body.end_date, 'end_date'),
+      status:
+        body.status === undefined
+          ? (existing?.status ?? 'active')
+          : str(body.status),
+      notes:
+        body.notes === undefined ? (existing?.notes ?? '') : str(body.notes),
+    };
+    if (!values.name)
+      throw new BadRequestException('Ein Vertragsname ist erforderlich.');
+    if (
+      !(SUBSCRIPTION_INTERVALS as readonly string[]).includes(values.interval)
+    ) {
+      throw new BadRequestException(
+        `Ungültiges Intervall. Erlaubt: ${SUBSCRIPTION_INTERVALS.join(', ')}`,
+      );
+    }
+    if (!(SUBSCRIPTION_STATUSES as readonly string[]).includes(values.status)) {
+      throw new BadRequestException(
+        `Ungültiger Status. Erlaubt: ${SUBSCRIPTION_STATUSES.join(', ')}`,
+      );
+    }
+    return values;
+  }
+
+  private validateRelations(values: SubscriptionValues): void {
+    validDateRange(values.start_date, values.end_date);
+    effectiveCompany(this.database.sqlite, values);
+    requireReference(this.database.sqlite, 'products', values.product_id);
+    const deal = linkedDeal(this.database.sqlite, values.deal_id);
+    if (deal) assertDealLink(this.database.sqlite, values, deal);
   }
 
   remove(id: string): { ok: boolean } {
@@ -367,36 +397,6 @@ export class SubscriptionsService {
       .run(id);
     if ((res.changes ?? 0) === 0) throw new NotFoundException('not_found');
     return { ok: true };
-  }
-
-  /** 400 when a product ref points at a non-existent product. */
-  private requireProduct(key: string | null): string | null {
-    if (key === null) return null;
-    const row = this.database.sqlite
-      .prepare('SELECT key FROM products WHERE key = ?')
-      .get(key) as { key: string } | undefined;
-    if (!row) {
-      throw new BadRequestException(
-        `Unknown product "${key}". Create it first via POST /v1/products.`,
-      );
-    }
-    return key;
-  }
-
-  /** 400 when a company/contact ref points at a non-existent row. */
-  private requireRef(
-    table: 'companies' | 'contacts',
-    id: string | null,
-    field: string,
-  ): string | null {
-    if (id === null) return null;
-    const row = this.database.sqlite
-      .prepare(`SELECT id FROM ${table} WHERE id = ?`)
-      .get(id) as { id: string } | undefined;
-    if (!row) {
-      throw new BadRequestException(`Unknown ${field} "${id}".`);
-    }
-    return id;
   }
 
   private require(id: string): Subscription {

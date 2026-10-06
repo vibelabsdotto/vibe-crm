@@ -29,6 +29,11 @@ export class CompaniesController {
     return this.companies.list(query);
   }
 
+  @Get(':id')
+  get(@Param('id') id: string): { company: Company } {
+    return { company: this.companies.get(id) };
+  }
+
   @Post()
   @HttpCode(201)
   create(@Body() body: CompanyBody): { company: Company } {

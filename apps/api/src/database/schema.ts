@@ -4,6 +4,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 import { account, session, user, verification } from './auth-schema';
 
@@ -20,6 +21,15 @@ export const companies = sqliteTable('companies', {
   notes: text('notes').notNull().default(''),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
+});
+
+// The application stores the explicit workspace company under key 'company'.
+// No default selection or seed is inferred from existing companies.
+export const workspaceSettings = sqliteTable('workspace_settings', {
+  key: text('key').primaryKey(),
+  companyId: text('company_id').references(() => companies.id, {
+    onDelete: 'set null',
+  }),
 });
 
 export const contacts = sqliteTable(
@@ -99,6 +109,9 @@ export const subscriptions = sqliteTable(
     productId: text('product_id').references(() => products.key, {
       onDelete: 'set null',
     }),
+    dealId: text('deal_id').references(() => deals.id, {
+      onDelete: 'set null',
+    }),
     name: text('name').notNull(),
     amount: real('amount').notNull().default(0),
     currency: text('currency').notNull().default('EUR'),
@@ -113,6 +126,7 @@ export const subscriptions = sqliteTable(
   (table) => [
     index('idx_subscriptions_company').on(table.companyId),
     index('idx_subscriptions_status').on(table.status),
+    uniqueIndex('idx_subscriptions_deal').on(table.dealId),
   ],
 );
 
@@ -185,6 +199,7 @@ export * from './auth-schema';
 
 export const schema = {
   companies,
+  workspaceSettings,
   contacts,
   products,
   deals,
@@ -205,6 +220,7 @@ export const databaseSchema = {
 };
 
 export type CompanyRow = typeof companies.$inferSelect;
+export type WorkspaceSettingRow = typeof workspaceSettings.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type ProductRow = typeof products.$inferSelect;
 export type DealRow = typeof deals.$inferSelect;

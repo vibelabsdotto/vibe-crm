@@ -42,6 +42,11 @@ export class SubscriptionsController {
     return this.subscriptions.summary();
   }
 
+  @Get(':id')
+  get(@Param('id') id: string): { subscription: Subscription } {
+    return { subscription: this.subscriptions.get(id) };
+  }
+
   @Post()
   @HttpCode(201)
   create(@Body() body: SubscriptionBody): { subscription: Subscription } {

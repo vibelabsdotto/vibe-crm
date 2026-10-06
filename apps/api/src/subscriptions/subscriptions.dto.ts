@@ -3,6 +3,7 @@ export interface Subscription {
   company_id: string | null;
   contact_id: string | null;
   product_id: string | null;
+  deal_id: string | null;
   name: string;
   amount: number;
   currency: string;
@@ -21,6 +22,7 @@ export interface SubscriptionBody {
   company_id?: unknown;
   contact_id?: unknown;
   product_id?: unknown;
+  deal_id?: unknown;
   name?: unknown;
   amount?: unknown;
   currency?: unknown;
@@ -41,6 +43,7 @@ export interface SubscriptionListQuery {
   filters?: string;
   status?: string;
   company_id?: string;
+  deal_id?: string;
   product?: string;
 }
 
@@ -50,6 +53,7 @@ export interface SubscriptionSummary {
   trial: number;
   paused: number;
   total: number;
+  byCurrency: Array<{ currency: string; mrr: number; active: number }>;
   byProduct: Array<{
     product: string;
     productName: string;

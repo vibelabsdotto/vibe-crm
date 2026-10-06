@@ -6,6 +6,16 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
+  assertLinkedSubscriptions,
+  effectiveCompany,
+  requireReference,
+} from '../common/entity-relations';
+import {
+  nullableReference,
+  nonnegativeAmount,
+  validDate,
+} from '../common/entity-validation';
+import {
   buildFilters,
   parseList,
   qid,
@@ -30,6 +40,7 @@ const DEAL_FIELDS = [
 ] as const;
 
 const EXTRAS = `d.*,
+  COALESCE(d.company_id, ct.company_id) as effective_company_id,
   ct.first_name as contact_first_name,
   ct.last_name as contact_last_name,
   COALESCE(co_direct.name, co_via.name) as company_name,
@@ -44,31 +55,6 @@ const JOINS = `deals d
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
-}
-
-function contactId(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  const raw =
-    typeof v === 'string'
-      ? v
-      : typeof v === 'number' || typeof v === 'boolean'
-        ? String(v)
-        : null;
-  if (raw === null) return null;
-  const s = raw.trim();
-  return s === '' ? null : s;
-}
-
-function num(v: unknown): number {
-  const n =
-    typeof v === 'number'
-      ? v
-      : typeof v === 'string'
-        ? Number(v.trim())
-        : Number(v);
-  if (!Number.isFinite(n))
-    throw new BadRequestException('Invalid value — must be a number');
-  return n;
 }
 
 @Injectable()
@@ -89,6 +75,7 @@ export class DealsService {
     const { page, limit, offset, order, search } = parseList(query);
     const stage = (query.stage ?? '').trim();
     const product = (query.product ?? '').trim();
+    const company = (query.company_id ?? '').trim();
     const cols = tableColumns(this.database.sqlite, 'deals');
     let sortCol = query.sort ?? 'id';
     if (!cols.has(sortCol)) sortCol = 'id';
@@ -106,6 +93,10 @@ export class DealsService {
     if (product) {
       where.push('d.product_id = ?');
       params.push(product);
+    }
+    if (company) {
+      where.push('COALESCE(d.company_id, ct.company_id) = ?');
+      params.push(company);
     }
     const flt = buildFilters(cols, query.filters, 'd.');
     where.push(...flt.clauses);
@@ -141,127 +132,203 @@ export class DealsService {
     return { deals: rows };
   }
 
-  create(body: DealBody): Deal {
-    // company_id/product_id are new base columns (contract v2) — the
-    // custom-field registry only knows contact|company|deal built-ins, so
-    // keep them out of resolveWrite to avoid false 422s.
-    const customBody = { ...body };
-    delete customBody.company_id;
-    delete customBody.product_id;
-    const { values, unknown } =
-      this.customFields.resolveWrite('deal', customBody);
-    const unknownErr = this.customFields.unknownFieldsError('deal', unknown);
-    if (unknownErr) throw new UnprocessableEntityException(unknownErr);
-    const missing = this.customFields.missingRequired('deal', values, 'create');
-    if (missing.length > 0) {
-      throw new BadRequestException(
-        `Missing required field(s): ${missing.join(', ')}`,
-      );
-    }
-    const name = str(body.name);
-    if (!name) throw new BadRequestException('Name is required');
-    const stage = this.resolveStage(body.stage, true);
-    const value = body.value === undefined ? 0 : num(body.value);
-    const companyId = this.checkedCompany(contactId(body.company_id));
-    const productId = this.checkedProduct(contactId(body.product_id));
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    this.database.sqlite
-      .prepare(
-        'INSERT INTO deals (id, name, contact_id, company_id, product_id, value, stage, close_date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        id,
-        name,
-        contactId(body.contact_id),
-        companyId,
-        productId,
-        value,
-        stage,
-        str(body.close_date),
-        str(body.notes),
-        now,
-        now,
-      );
-    this.customFields.applyValues('deal', id, values);
+  get(id: string): Deal {
     return this.require(id);
   }
 
+  create(body: DealBody): Deal {
+    return this.database.sqlite
+      .transaction(() => {
+        // company_id/product_id are new base columns (contract v2) — the
+        // custom-field registry only knows contact|company|deal built-ins, so
+        // keep them out of resolveWrite to avoid false 422s.
+        const customBody = { ...body };
+        delete customBody.company_id;
+        delete customBody.product_id;
+        const { values, unknown } = this.customFields.resolveWrite(
+          'deal',
+          customBody,
+        );
+        const unknownErr = this.customFields.unknownFieldsError(
+          'deal',
+          unknown,
+        );
+        if (unknownErr) throw new UnprocessableEntityException(unknownErr);
+        const missing = this.customFields.missingRequired(
+          'deal',
+          values,
+          'create',
+        );
+        if (missing.length > 0) {
+          throw new BadRequestException(
+            `Erforderliche Felder fehlen: ${missing.join(', ')}`,
+          );
+        }
+        const name = str(body.name);
+        if (!name)
+          throw new BadRequestException('Ein Deal-Name ist erforderlich.');
+        const stage = this.resolveStage(body.stage, true);
+        const value =
+          body.value === undefined ? 0 : nonnegativeAmount(body.value, 'value');
+        const companyId = nullableReference(body.company_id, 'company_id');
+        const contactId = nullableReference(body.contact_id, 'contact_id');
+        effectiveCompany(this.database.sqlite, {
+          company_id: companyId,
+          contact_id: contactId,
+        });
+        const productId = requireReference(
+          this.database.sqlite,
+          'products',
+          nullableReference(body.product_id, 'product_id'),
+        );
+        const closeDate =
+          body.close_date === undefined
+            ? ''
+            : validDate(body.close_date, 'close_date');
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        this.database.sqlite
+          .prepare(
+            'INSERT INTO deals (id, name, contact_id, company_id, product_id, value, stage, close_date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(
+            id,
+            name,
+            contactId,
+            companyId,
+            productId,
+            value,
+            stage,
+            closeDate,
+            str(body.notes),
+            now,
+            now,
+          );
+        this.customFields.applyValues('deal', id, values);
+        return this.require(id);
+      })
+      .immediate();
+  }
+
   update(id: string, body: DealBody): Deal {
-    const customBody = { ...body };
-    delete customBody.company_id;
-    delete customBody.product_id;
-    const { values, unknown } =
-      this.customFields.resolveWrite('deal', customBody);
-    const unknownErr = this.customFields.unknownFieldsError('deal', unknown);
-    if (unknownErr) throw new UnprocessableEntityException(unknownErr);
-    const missing = this.customFields.missingRequired('deal', values, 'update');
-    if (missing.length > 0) {
-      throw new BadRequestException(
-        `Missing required field(s): ${missing.join(', ')}`,
-      );
-    }
-    const fields: string[] = [];
-    const params: unknown[] = [];
-    let nextStage: string | undefined;
-    for (const key of DEAL_FIELDS) {
-      if (body[key] === undefined) continue;
-      switch (key) {
-        case 'name':
-          fields.push('name = ?');
-          params.push(str(body.name));
-          break;
-        case 'contact_id':
-          fields.push('contact_id = ?');
-          params.push(contactId(body.contact_id));
-          break;
-        case 'company_id':
-          fields.push('company_id = ?');
-          params.push(this.checkedCompany(contactId(body.company_id)));
-          break;
-        case 'product_id':
-          fields.push('product_id = ?');
-          params.push(this.checkedProduct(contactId(body.product_id)));
-          break;
-        case 'value':
-          fields.push('value = ?');
-          params.push(num(body.value));
-          break;
-        case 'stage':
-          nextStage = this.resolveStage(body.stage, false);
-          fields.push('stage = ?');
-          params.push(nextStage);
-          break;
-        case 'close_date':
-          fields.push('close_date = ?');
-          params.push(str(body.close_date));
-          break;
-        case 'notes':
-          fields.push('notes = ?');
-          params.push(str(body.notes));
-          break;
-      }
-    }
-    const hasCustom = Object.keys(values).length > 0;
-    if (fields.length === 0 && !hasCustom) {
-      throw new BadRequestException('No fields to update');
-    }
-    const existing = this.require(id);
-    if (fields.length > 0) {
-      if (body.name !== undefined && str(body.name) === '') {
-        throw new BadRequestException('Name cannot be empty');
-      }
-      fields.push('updated_at = ?');
-      params.push(new Date().toISOString(), id);
-      this.database.sqlite
-        .prepare(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params);
-    }
-    this.customFields.applyValues('deal', id, values);
-    if (nextStage !== undefined && nextStage !== existing.stage) {
-      this.writeStageChangeActivity(id, existing.stage, nextStage);
-    }
-    return this.require(id);
+    return this.database.sqlite
+      .transaction(() => {
+        const existing = this.require(id);
+        const relations = {
+          company_id:
+            body.company_id === undefined
+              ? existing.company_id
+              : nullableReference(body.company_id, 'company_id'),
+          contact_id:
+            body.contact_id === undefined
+              ? existing.contact_id
+              : nullableReference(body.contact_id, 'contact_id'),
+          product_id:
+            body.product_id === undefined
+              ? existing.product_id
+              : nullableReference(body.product_id, 'product_id'),
+        };
+        effectiveCompany(this.database.sqlite, relations);
+        requireReference(
+          this.database.sqlite,
+          'products',
+          relations.product_id,
+        );
+        if (
+          body.company_id !== undefined ||
+          body.contact_id !== undefined ||
+          body.product_id !== undefined
+        ) {
+          assertLinkedSubscriptions(this.database.sqlite, id, relations);
+        }
+        const customBody = { ...body };
+        delete customBody.company_id;
+        delete customBody.product_id;
+        const { values, unknown } = this.customFields.resolveWrite(
+          'deal',
+          customBody,
+        );
+        const unknownErr = this.customFields.unknownFieldsError(
+          'deal',
+          unknown,
+        );
+        if (unknownErr) throw new UnprocessableEntityException(unknownErr);
+        const missing = this.customFields.missingRequired(
+          'deal',
+          values,
+          'update',
+        );
+        if (missing.length > 0) {
+          throw new BadRequestException(
+            `Erforderliche Felder fehlen: ${missing.join(', ')}`,
+          );
+        }
+        const fields: string[] = [];
+        const params: unknown[] = [];
+        let nextStage: string | undefined;
+        for (const key of DEAL_FIELDS) {
+          if (body[key] === undefined) continue;
+          switch (key) {
+            case 'name':
+              fields.push('name = ?');
+              params.push(str(body.name));
+              break;
+            case 'contact_id':
+              fields.push('contact_id = ?');
+              params.push(relations.contact_id);
+              break;
+            case 'company_id':
+              fields.push('company_id = ?');
+              params.push(relations.company_id);
+              break;
+            case 'product_id':
+              fields.push('product_id = ?');
+              params.push(relations.product_id);
+              break;
+            case 'value':
+              fields.push('value = ?');
+              params.push(nonnegativeAmount(body.value, 'value'));
+              break;
+            case 'stage':
+              nextStage = this.resolveStage(body.stage, false);
+              fields.push('stage = ?');
+              params.push(nextStage);
+              break;
+            case 'close_date':
+              fields.push('close_date = ?');
+              params.push(validDate(body.close_date, 'close_date'));
+              break;
+            case 'notes':
+              fields.push('notes = ?');
+              params.push(str(body.notes));
+              break;
+          }
+        }
+        const hasCustom = Object.keys(values).length > 0;
+        if (fields.length === 0 && !hasCustom) {
+          throw new BadRequestException(
+            'Keine Felder zum Aktualisieren angegeben.',
+          );
+        }
+        if (fields.length > 0) {
+          if (body.name !== undefined && str(body.name) === '') {
+            throw new BadRequestException(
+              'Der Deal-Name darf nicht leer sein.',
+            );
+          }
+          fields.push('updated_at = ?');
+          params.push(new Date().toISOString(), id);
+          this.database.sqlite
+            .prepare(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`)
+            .run(...params);
+        }
+        this.customFields.applyValues('deal', id, values);
+        if (nextStage !== undefined && nextStage !== existing.stage) {
+          this.writeStageChangeActivity(id, existing.stage, nextStage);
+        }
+        return this.require(id);
+      })
+      .immediate();
   }
 
   remove(id: string): { ok: boolean } {
@@ -279,45 +346,20 @@ export class DealsService {
       if (allowDefault) {
         return this.stages.list()[0]?.key ?? 'prospect';
       }
-      throw new BadRequestException('Stage cannot be empty');
+      throw new BadRequestException('Die Pipeline-Stufe darf nicht leer sein.');
     }
     if (!this.stages.find(s)) {
-      throw new BadRequestException(this.stages.unknownStageError(s));
+      throw new BadRequestException(
+        `Unbekannte Pipeline-Stufe "${s}". Erlaubt: ${this.stages
+          .list()
+          .map((stage) => stage.key)
+          .join(', ')}`,
+      );
     }
     return s;
   }
 
-  /** 400 when a company ref points at a non-existent company. */
-  private checkedCompany(id: string | null): string | null {
-    if (id === null) return null;
-    const row = this.database.sqlite
-      .prepare('SELECT id FROM companies WHERE id = ?')
-      .get(id) as { id: string } | undefined;
-    if (!row) {
-      throw new BadRequestException(`Unknown company_id "${id}".`);
-    }
-    return id;
-  }
-
-  /** 400 when a product ref points at a non-existent product. */
-  private checkedProduct(key: string | null): string | null {
-    if (key === null) return null;
-    const row = this.database.sqlite
-      .prepare('SELECT key FROM products WHERE key = ?')
-      .get(key) as { key: string } | undefined;
-    if (!row) {
-      throw new BadRequestException(
-        `Unknown product "${key}". Create it first via POST /v1/products.`,
-      );
-    }
-    return key;
-  }
-
-  private writeStageChangeActivity(
-    id: string,
-    from: string,
-    to: string,
-  ): void {
+  private writeStageChangeActivity(id: string, from: string, to: string): void {
     const target = this.stages.find(to);
     let bodyText = `Stage changed from ${from} to ${to}`;
     if (target?.is_won === 1) bodyText = `Deal moved to ${target.label} — won`;

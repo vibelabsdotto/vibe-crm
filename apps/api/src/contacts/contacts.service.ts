@@ -6,6 +6,11 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
+  assertContactRelations,
+  requireReference,
+} from '../common/entity-relations';
+import { nullableReference } from '../common/entity-validation';
+import {
   buildFilters,
   parseList,
   qid,
@@ -30,19 +35,6 @@ const CONTACT_STATUSES = ['lead', 'active', 'inactive', 'churned'] as const;
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
-}
-
-function companyId(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  const raw =
-    typeof v === 'string'
-      ? v
-      : typeof v === 'number' || typeof v === 'boolean'
-        ? String(v)
-        : null;
-  if (raw === null) return null;
-  const s = raw.trim();
-  return s === '' ? null : s;
 }
 
 function assertStatus(v: unknown): string {
@@ -159,7 +151,11 @@ export class ContactsService {
         str(body.last_name),
         str(body.email),
         str(body.phone),
-        companyId(body.company_id),
+        requireReference(
+          this.database.sqlite,
+          'companies',
+          nullableReference(body.company_id, 'company_id'),
+        ),
         str(body.title),
         status,
         now,
@@ -170,53 +166,71 @@ export class ContactsService {
   }
 
   update(id: string, body: ContactBody): Contact {
-    const { values, unknown } = this.customFields.resolveWrite('contact', body);
-    const unknownErr = this.customFields.unknownFieldsError('contact', unknown);
-    if (unknownErr) throw new UnprocessableEntityException(unknownErr);
-    const missing = this.customFields.missingRequired(
-      'contact',
-      values,
-      'update',
-    );
-    if (missing.length > 0) {
-      throw new BadRequestException(
-        `Missing required field(s): ${missing.join(', ')}`,
-      );
-    }
-    const fields: string[] = [];
-    const params: unknown[] = [];
-    for (const key of CONTACT_FIELDS) {
-      if (body[key] !== undefined) {
-        if (key === 'status') {
-          fields.push('status = ?');
-          params.push(assertStatus(body[key]));
-        } else {
-          fields.push(`${key} = ?`);
-          params.push(str(body[key]));
+    return this.database.sqlite
+      .transaction(() => {
+        const { values, unknown } = this.customFields.resolveWrite(
+          'contact',
+          body,
+        );
+        const unknownErr = this.customFields.unknownFieldsError(
+          'contact',
+          unknown,
+        );
+        if (unknownErr) throw new UnprocessableEntityException(unknownErr);
+        const missing = this.customFields.missingRequired(
+          'contact',
+          values,
+          'update',
+        );
+        if (missing.length > 0) {
+          throw new BadRequestException(
+            `Missing required field(s): ${missing.join(', ')}`,
+          );
         }
-      }
-    }
-    if (body.company_id !== undefined) {
-      fields.push('company_id = ?');
-      params.push(companyId(body.company_id));
-    }
-    const hasCustom = Object.keys(values).length > 0;
-    if (fields.length === 0 && !hasCustom) {
-      throw new BadRequestException('No fields to update');
-    }
-    this.get(id);
-    if (fields.length > 0) {
-      if (body.first_name !== undefined && str(body.first_name) === '') {
-        throw new BadRequestException('First name cannot be empty');
-      }
-      fields.push('updated_at = ?');
-      params.push(new Date().toISOString(), id);
-      this.database.sqlite
-        .prepare(`UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params);
-    }
-    this.customFields.applyValues('contact', id, values);
-    return this.get(id);
+        const fields: string[] = [];
+        const params: unknown[] = [];
+        for (const key of CONTACT_FIELDS) {
+          if (body[key] !== undefined) {
+            if (key === 'status') {
+              fields.push('status = ?');
+              params.push(assertStatus(body[key]));
+            } else {
+              fields.push(`${key} = ?`);
+              params.push(str(body[key]));
+            }
+          }
+        }
+        if (body.company_id !== undefined) {
+          fields.push('company_id = ?');
+          params.push(
+            requireReference(
+              this.database.sqlite,
+              'companies',
+              nullableReference(body.company_id, 'company_id'),
+            ),
+          );
+        }
+        const hasCustom = Object.keys(values).length > 0;
+        if (fields.length === 0 && !hasCustom) {
+          throw new BadRequestException('No fields to update');
+        }
+        this.get(id);
+        if (fields.length > 0) {
+          if (body.first_name !== undefined && str(body.first_name) === '') {
+            throw new BadRequestException('First name cannot be empty');
+          }
+          fields.push('updated_at = ?');
+          params.push(new Date().toISOString(), id);
+          this.database.sqlite
+            .prepare(`UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`)
+            .run(...params);
+        }
+        this.customFields.applyValues('contact', id, values);
+        if (body.company_id !== undefined)
+          assertContactRelations(this.database.sqlite, id);
+        return this.get(id);
+      })
+      .immediate();
   }
 
   remove(id: string): { ok: boolean } {
