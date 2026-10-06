@@ -47,6 +47,23 @@ DEALS & PIPELINE
   vibe-crm pipeline                         deals grouped by stage
   vibe-crm stages                           list pipeline stages
 
+CUSTOM FIELDS & SHARED DEAL VIEW
+  vibe-crm custom-fields [--entity company|contact|deal]
+  vibe-crm custom-field add --entity company|contact|deal --key KEY --label LABEL
+                            [--type TYPE] [--options JSON_OBJECT] [--position INTEGER]
+  vibe-crm deal-view fields                 list selectable exact field keys
+  vibe-crm deal-view show                   shared columns, defaults, rules and warnings
+  vibe-crm deal-view set --columns name,company_name,next_action
+  vibe-crm deal-view reset                  reset columns only, preserve field rules
+  vibe-crm deal-view rules [--field KEY]
+  vibe-crm deal-view rule-set --field KEY --when lost
+  vibe-crm deal-view rule-set --field KEY --when stages --stages prospect,qualified
+  vibe-crm deal-view rule-remove --field KEY
+  name must remain in columns. Rules target registered custom deal fields only.
+  Custom field types: string|text|integer|decimal|boolean|date|datetime|enumeration|json.
+  Writes affect the selected shared workspace, not just your context or user.
+  Use custom-field --help or deal-view --help for validation and readback details.
+
 PRODUCTS & SUBSCRIPTIONS
   vibe-crm products [--search <q>]
   vibe-crm product add --name <v> [--key <slug>] [--type product|service|other] [--status <v>] [--notes <v>]

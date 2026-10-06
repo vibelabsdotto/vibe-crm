@@ -1,4 +1,5 @@
 import * as C from "./commands.mjs";
+import * as F from "./field-commands.mjs";
 import { parseArgs, validateFlags } from "./args.mjs";
 import { ApiError, UsageError, redactSecrets } from "./errors.mjs";
 import { assertInstance, health, request } from "./client.mjs";
@@ -34,6 +35,15 @@ const DATA = {
   "deal move": [C.cmdDealMove, ["id", "stage"]],
   "deal rm": [C.cmdDealRm, ["id"]],
   pipeline: [C.cmdPipeline, []], stages: [C.cmdStages, []],
+  "custom-fields": [F.cmdCustomFields, ["entity"]],
+  "custom-field add": [F.cmdCustomFieldAdd, ["entity", "key", "label", "type", "options", "position"]],
+  "deal-view fields": [(a, c) => F.cmdDealView(a, c, "fields"), []],
+  "deal-view show": [(a, c) => F.cmdDealView(a, c, "show"), []],
+  "deal-view set": [(a, c) => F.cmdDealView(a, c, "set"), ["columns"]],
+  "deal-view reset": [(a, c) => F.cmdDealView(a, c, "reset"), []],
+  "deal-view rules": [(a, c) => F.cmdDealView(a, c, "rules"), ["field"]],
+  "deal-view rule-set": [(a, c) => F.cmdDealView(a, c, "rule-set"), ["field", "when", "stages"]],
+  "deal-view rule-remove": [(a, c) => F.cmdDealView(a, c, "rule-remove"), ["field"]],
   products: [C.cmdProducts, ["search"]],
   "product add": [C.cmdProductAdd, ["name", "key", "type", "status", "notes"]],
   "product rm": [C.cmdProductRm, ["key"]],
@@ -72,6 +82,7 @@ const HELP = {
   contacts: C.CONTACTS_HELP, contact: C.CONTACT_HELP,
   companies: C.COMPANIES_HELP, company: C.COMPANY_HELP,
   deals: C.DEALS_HELP, deal: C.DEAL_HELP, pipeline: C.PIPELINE_HELP, stages: C.STAGES_HELP,
+  "custom-fields": F.CUSTOM_FIELDS_HELP, "custom-field": F.CUSTOM_FIELD_HELP, "deal-view": F.DEAL_VIEW_HELP,
   products: C.PRODUCTS_HELP, product: C.PRODUCT_HELP,
   subscriptions: C.SUBSCRIPTIONS_HELP, subscription: C.SUBSCRIPTION_HELP,
   mrr: C.MRR_HELP, activity: C.ACTIVITY_HELP, import: C.IMPORT_HELP, tokens: C.TOKENS_HELP
