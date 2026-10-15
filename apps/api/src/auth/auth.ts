@@ -22,6 +22,10 @@ export function createAuth(
   const corsOrigin = config.get<string>('CORS_ORIGIN');
   const googleClientId = config.get<string>('GOOGLE_CLIENT_ID');
   const googleClientSecret = config.get<string>('GOOGLE_CLIENT_SECRET');
+  // Every account sees the whole workspace, so a hosted instance must not let
+  // strangers register. AUTH_DISABLE_SIGNUP=true closes email and Google sign-up;
+  // existing accounts keep signing in.
+  const disableSignUp = config.get<string>('AUTH_DISABLE_SIGNUP') === 'true';
 
   // Cookie-Domain: In Prod liegen Web (crm.vibelabs.to) und API
   // (api-crm.vibelabs.to) auf verschiedenen Subdomains. Damit der
@@ -61,13 +65,14 @@ export function createAuth(
         verification: databaseSchema.verification,
       },
     }),
-    emailAndPassword: { enabled: true },
+    emailAndPassword: { enabled: true, disableSignUp },
     ...(googleClientId && googleClientSecret
       ? {
           socialProviders: {
             google: {
               clientId: googleClientId,
               clientSecret: googleClientSecret,
+              disableSignUp,
             },
           },
         }
